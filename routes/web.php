@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\Task;
 use App\Models\Topic;
 use Illuminate\Support\Facades\Route;
 
@@ -20,6 +21,14 @@ Route::get('topics/{topic:slug}', fn (Topic $topic) => view('quiz', ['topic' => 
 Route::view('review', 'quiz', ['topic' => null])
     ->middleware(['auth', 'verified'])
     ->name('quiz.review');
+
+Route::view('tasks', 'tasks')
+    ->middleware(['auth', 'verified'])
+    ->name('tasks.index');
+
+Route::get('tasks/{task}', fn (Task $task) => view('task', ['task' => $task]))
+    ->middleware(['auth', 'verified'])
+    ->name('tasks.show');
 
 Route::view('profile', 'profile')
     ->middleware(['auth'])

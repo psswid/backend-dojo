@@ -130,6 +130,25 @@ services:
     networks:
       - dojo
 
+  # Isolated PHP code runner for coding tasks (snippet/debug).
+  # Read-only FS, non-root, no DB/network creds, memory+CPU capped, tmpfs /tmp.
+  runner:
+    image: php:8.4-cli-alpine
+    container_name: backend-dojo-runner
+    user: "1000:1000"
+    restart: unless-stopped
+    working_dir: /runner
+    command: ["php", "-S", "0.0.0.0:8080", "runner.php"]
+    volumes:
+      - ./docker/runner:/runner:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    read_only: true
+    mem_limit: 256m
+    cpus: 1.0
+    networks:
+      - dojo
+
 networks:
   dojo:
     driver: bridge

@@ -1,0 +1,56 @@
+{
+  "topic_slug": "concurrency-race-conditions",
+  "tasks": [
+    {
+      "type": "snippet",
+      "title": "Detect a stale optimistic-lock version",
+      "difficulty": "easy",
+      "tags": ["optimistic-locking", "versioning", "concurrency"],
+      "description": "Implement is_stale(int $expectedVersion, int $currentVersion): bool. It returns true when the version currently stored in the database no longer equals the version your code read earlier, which means another writer committed first and an optimistic-lock UPDATE (WHERE version = expected) would match 0 rows. Examples: is_stale(3, 3) returns false (the copy is still fresh); is_stale(3, 4) returns true (another writer bumped the version underneath you).",
+      "starter_code": "function is_stale(int $expectedVersion, int $currentVersion): bool {\n    // your code here\n}",
+      "test_suite": "expect('matching version is fresh', is_stale(3, 3), false);\nexpect('version bumped by another writer is stale', is_stale(3, 4), true);\nexpect('unknown newer version is stale', is_stale(2, 7), true);\nexpect('initial version 1 still matches', is_stale(1, 1), false);",
+      "solution": "function is_stale(int $expectedVersion, int $currentVersion): bool {\n    return $expectedVersion !== $currentVersion;\n}",
+      "rubric": null
+    },
+    {
+      "type": "debug",
+      "title": "Cap the exponential-backoff delay",
+      "difficulty": "medium",
+      "tags": ["exponential-backoff", "retries", "defensive-coding"],
+      "description": "backoffDelay(int $attempt, int $baseMs = 100, int $maxMs = 5000): int should return the wait time for the given 1-based retry attempt: baseMs * 2^(attempt - 1), clamped to maxMs. So attempt 1 waits 100 ms, attempt 2 waits 200 ms, and delays double until they hit the 5000 ms cap. Hint: the broken version doubles the delay one retry too early (it computes 2^attempt instead of 2^(attempt - 1)) and never clamps to maxMs, so backoffDelay(10) wrongly returns 102400 instead of 5000.",
+      "starter_code": "function backoffDelay(int $attempt, int $baseMs = 100, int $maxMs = 5000): int {\n    return $baseMs * 2 ** $attempt;\n}",
+      "test_suite": "expect('first attempt waits the base delay', backoffDelay(1), 100);\nexpect('second attempt doubles the base', backoffDelay(2), 200);\nexpect('third attempt waits four times the base', backoffDelay(3), 400);\nexpect('late attempts are capped at maxMs', backoffDelay(10), 5000);\nexpect('custom base applies', backoffDelay(4, 50, 1000), 400);\nexpect('custom cap clamps large delays', backoffDelay(10, 50, 1000), 1000);",
+      "solution": "function backoffDelay(int $attempt, int $baseMs = 100, int $maxMs = 5000): int {\n    $delay = $baseMs * 2 ** ($attempt - 1);\n\n    return min($delay, $maxMs);\n}",
+      "rubric": null
+    },
+    {
+      "type": "scenario",
+      "title": "Prevent inventory overselling under concurrent checkouts",
+      "difficulty": "hard",
+      "tags": ["transactions", "pessimistic-locking", "optimistic-locking", "atomic-updates", "idempotency"],
+      "description": "You run a Laravel storefront that sells tickets. Stock lives in the stock column of the products table, and two customers check out at the same instant for the last ticket. The current code does: if ($product->stock > 0) { $product->stock--; $product->save(); } and both orders succeed, overselling the event. Explain why that happens, then design the fix: when would you use a DB transaction with pessimistic row locks, when optimistic versioning, and when a single atomic conditional update — and how do you keep retries and queue jobs from double-booking?",
+      "starter_code": null,
+      "test_suite": null,
+      "solution": "Never read-then-write stock outside a transaction: that check-then-decrement gap is the race. Two requests can both pass if ($product->stock > 0) before either write commits, so both decrement and stock goes negative.\n\nThe strongest fix needs no locks at all: one atomic conditional update. $affected = Product::where('id', $id)->where('stock', '>', 0)->decrement('stock', 1); — decrement() returns the number of affected rows, so if $affected === 1 the unit was yours and you may create the order; if 0, refuse the sale. The database re-evaluates WHERE stock > 0 under the row lock, so concurrent decrements serialize and the last ticket can only ever be taken once. Wrap the decrement and the order creation in DB::transaction(...) so they commit or roll back together.\n\nUse pessimistic locking when you must read stock first — for example to compute totals from it. Inside the transaction, Product::whereKey($id)->lockForUpdate()->first() issues SELECT ... FOR UPDATE, so a competing transaction blocks until you commit and then reads fresh stock. Keep the transaction short, lock only rows you actually touch, and acquire locks in the same order across all code paths; on deadlock (MySQL 1213) retry the transaction a bounded number of times.\n\nUse optimistic locking when conflicts are rare but reads are long-lived or cached: add a version column and update with WHERE version = $expected; when 0 rows are affected your write was stale, so reload the row and retry the whole flow up to a limit.\n\nFinally, make the edges idempotent: attach a unique idempotency key to each order (backed by a unique constraint) so duplicate HTTP requests or queue redeliveries cannot book twice, and prefer these database-level guarantees over in-memory or Redis counters unless you genuinely need horizontal throughput.",
+      "rubric": {
+        "criteria": [
+          "Identifies the read-then-write check-and-decrement gap as the root cause of overselling",
+          "Proposes an atomic conditional decrement with a stock > 0 guard and checks the affected-row count",
+          "Wraps the stock change and order creation in a single DB transaction",
+          "Explains pessimistic locking via lockForUpdate() / SELECT ... FOR UPDATE and when it applies",
+          "Explains optimistic locking with a version column, stale detection, and bounded retry",
+          "Covers deadlock handling and consistent lock ordering",
+          "Covers idempotency keys or unique constraints so retries and queue redeliveries cannot double-book"
+        ],
+        "key_points": [
+          "An atomic conditional UPDATE cannot oversell because the DB re-evaluates the guard under the row lock",
+          "Laravel decrement() returns the number of affected rows; 0 means the guard failed",
+          "lockForUpdate() holds the row lock until commit or rollback so later readers see committed state",
+          "Optimistic locking: UPDATE ... WHERE version = expected; 0 affected rows means stale, so reload and retry with a cap",
+          "Consistent lock ordering plus deadlock retries avoid MySQL 1213 failures",
+          "A unique idempotency key makes duplicate requests and queue redeliveries harmless"
+        ]
+      }
+    }
+  ]
+}

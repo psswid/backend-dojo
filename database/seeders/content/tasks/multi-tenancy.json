@@ -1,0 +1,53 @@
+{
+  "topic_slug": "multi-tenancy",
+  "tasks": [
+    {
+      "type": "snippet",
+      "title": "Build a deterministic, sanitized tenant database name",
+      "difficulty": "easy",
+      "tags": ["multi-tenancy", "string-formatting", "deterministic"],
+      "description": "Write tenant_db_name(int $tenantId): string — returns a deterministic, database-name-safe name of the form 'tenant_<zero-padded-id>'. Example: tenant_db_name(7) returns 'tenant_000007'; tenant_db_name(12345) returns 'tenant_012345'.",
+      "starter_code": "function tenant_db_name(int $tenantId): string\n{\n    // your code here\n}",
+      "test_suite": "expect('single-digit tenant is padded to 6 digits', tenant_db_name(7), 'tenant_000007');\nexpect('multi-digit tenant is padded', tenant_db_name(12345), 'tenant_012345');\nexpect('tenant id zero maps deterministically', tenant_db_name(0), 'tenant_000000');\nexpect('ids longer than 6 digits stay deterministic', tenant_db_name(1234567), 'tenant_1234567');",
+      "solution": "function tenant_db_name(int $tenantId): string\n{\n    // A DB name may only hold safe characters, so map the int to a\n    // deterministic zero-padded string; clamping keeps the output stable.\n    $id = max(0, $tenantId);\n\n    return 'tenant_' . str_pad((string) $id, 6, '0', STR_PAD_LEFT);\n}",
+      "rubric": null
+    },
+    {
+      "type": "debug",
+      "title": "filter_by_tenant leaks rows owned by other tenants",
+      "difficulty": "medium",
+      "tags": ["multi-tenancy", "data-leak", "array-filtering"],
+      "description": "filter_by_tenant(array $rows, int $tenantId): array must return ONLY the rows whose tenant_id strictly equals $tenantId, preserving their original order. Hint: the current check scans every field of each row instead of just the tenant_id column, so a row whose id (or any other field) happens to equal the tenant id leaks into the result — a cross-tenant data leak.",
+      "starter_code": "function filter_by_tenant(array $rows, int $tenantId): array\n{\n    $result = [];\n\n    foreach ($rows as $row) {\n        if (in_array($tenantId, $row)) {\n            $result[] = $row;\n        }\n    }\n\n    return $result;\n}",
+      "test_suite": "expect('excludes rows that merely share an id value', filter_by_tenant([\n    ['id' => 9, 'tenant_id' => 3, 'name' => 'Acme'],\n    ['id' => 1, 'tenant_id' => 9, 'name' => 'Globex'],\n    ['id' => 4, 'tenant_id' => 9, 'name' => 'Initech'],\n], 9), [\n    ['id' => 1, 'tenant_id' => 9, 'name' => 'Globex'],\n    ['id' => 4, 'tenant_id' => 9, 'name' => 'Initech'],\n]);\nexpect('empty result set stays empty', filter_by_tenant([], 5), []);",
+      "solution": "function filter_by_tenant(array $rows, int $tenantId): array\n{\n    $result = [];\n\n    foreach ($rows as $row) {\n        // Scope strictly on the tenant_id column; rows missing the key\n        // must never match (null !== $tenantId), so no row can leak in.\n        if (($row['tenant_id'] ?? null) === $tenantId) {\n            $result[] = $row;\n        }\n    }\n\n    return $result;\n}",
+      "rubric": null
+    },
+    {
+      "type": "scenario",
+      "title": "Design a data-leak-proof multi-tenant Laravel SaaS",
+      "difficulty": "hard",
+      "tags": ["multi-tenancy", "architecture", "laravel", "isolation", "security"],
+      "description": "Design a multi-tenant Laravel SaaS. Choose an isolation model (shared database with tenant_id vs database-per-tenant vs schema-per-tenant), explain tenant resolution, how migrations behave under your model, how queues and cache stay tenant-aware, and how you prevent cross-tenant data leaks. Weigh trade-offs and defend your choice.",
+      "starter_code": null,
+      "test_suite": null,
+      "solution": "Default to a shared database with a tenant_id column for most B2B SaaS workloads; reserve database-per-tenant or schema-per-tenant for customers with hard isolation requirements (regulated data, per-tenant backup/retention SLAs) where the extra cost is justified. With a shared schema, add tenant_id to every tenant-owned table, include it in composite unique keys so a unique slug can repeat across tenants, and add it to foreign keys where the DB engine allows. Never rely on app code alone: install a Laravel global scope that injects where tenant_id = ? into every model query, so a forgotten ->where() or an eager-loaded relation cannot silently return another tenant's rows.\n\nResolve the tenant in middleware from the subdomain or the authenticated user, never from a client-controlled body parameter, and bind the resolved Tenant into the container (e.g. a TenantContext singleton) for the whole request. Queued jobs are a classic leak vector: serialize tenant_id onto the job payload and, in a queue middleware, re-resolve and rebind the tenant context before the job executes. Cache and session keys must be tenant-scoped as well — cache()->tags() or a tenant:{id}: key prefix — because a shared cache key is a cross-tenant leak of the same severity as a shared DB row.\n\nMigrations depend on the model: a shared schema migrates once, centrally. Database- or schema-per-tenant requires per-tenant migration runners, per-tenant connection configuration, runtime connection swapping, and a strict first/last-tenant migration discipline — an operational tax usually not worth paying until isolation is an actual product requirement. Finally, prevent leaks with defense in depth: global scopes, a tenant-aware query layer, DB constraints that include tenant_id, and integration tests asserting Tenant A can never read Tenant B's rows, including soft-deleted records and eager-loaded relations.",
+      "rubric": {
+        "criteria": [
+          "Isolation-model choice is justified against the product's isolation, compliance, and scaling requirements — not picked by default.",
+          "Tenant resolution (subdomain/authenticated user, middleware, container-bound context) is described, including why client-controlled tenant ids are rejected.",
+          "Migrations strategy matches the chosen model: central single-schema migrations versus per-tenant migration runners and connection handling.",
+          "Tenant-awareness of queues (tenant_id on the job + rebinding middleware) and tenant-scoped cache/session keys are covered.",
+          "Data-leak prevention is defense-in-depth: global scopes, DB constraints including tenant_id, and cross-tenant integration tests."
+        ],
+        "key_points": [
+          "Shared DB with tenant_id is the sensible default; db/schema-per-tenant only for genuine isolation or compliance requirements.",
+          "Tenant identity comes from request context (subdomain/auth), never from client input.",
+          "Global scopes make tenant filtering automatic so a missing ->where() cannot leak data.",
+          "Queues and cache are leak vectors too: bind tenant_id to jobs and prefix or partition cache keys.",
+          "Enforce tenant_id in unique/foreign-key constraints and prove isolation with cross-tenant tests."
+        ]
+      }
+    }
+  ]
+}

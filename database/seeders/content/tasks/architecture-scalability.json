@@ -1,0 +1,58 @@
+{
+  "topic_slug": "architecture-scalability",
+  "tasks": [
+    {
+      "type": "snippet",
+      "title": "next_cursor(): encode a base64 keyset cursor",
+      "difficulty": "easy",
+      "tags": ["pagination", "cursor", "base64", "keyset-pagination"],
+      "description": "Implement `next_cursor(array $rows, string $orderBy): ?string` for keyset (cursor) pagination. $rows is an already-sorted list of associative rows and every row has the key $orderBy. Return the cursor a client sends back to request the next page: base64_encode((string) of the last row's $orderBy value), or null when $rows is empty (no next page). Example 1: next_cursor([['id' => 3, 'title' => 'A'], ['id' => 8, 'title' => 'B']], 'id') returns 'OA==' (base64 of '8'). Example 2: next_cursor([], 'id') returns null.",
+      "starter_code": "function next_cursor(array $rows, string $orderBy): ?string {\n    // your code here\n}",
+      "test_suite": "expect('empty rows mean no next page', next_cursor([], 'id'), null);\nexpect('single row encodes its own key', next_cursor([['id' => 5, 'title' => 'A']], 'id'), 'NQ==');\nexpect('encodes the last row sort key', next_cursor([['id' => 3, 'title' => 'A'], ['id' => 8, 'title' => 'B']], 'id'), 'OA==');\nexpect('string sort keys work too', next_cursor([['slug' => 'ab'], ['slug' => 'x']], 'slug'), 'eA==');",
+      "solution": "function next_cursor(array $rows, string $orderBy): ?string {\n    if ($rows === []) {\n        return null;\n    }\n\n    $last = end($rows);\n\n    return base64_encode((string) $last[$orderBy]);\n}",
+      "rubric": null
+    },
+    {
+      "type": "debug",
+      "title": "decode_cursor(): null sentinel wrongly returns []",
+      "difficulty": "medium",
+      "tags": ["pagination", "cursor", "null-handling", "base64"],
+      "description": "decode_cursor(?string $cursor): ?array decodes the base64 JSON cursor produced by the encoder: a null or empty-string cursor means 'no further page' and MUST return null, because callers check `=== null` to decide when to stop paginating. A well-formed cursor returns the associative array it contains (e.g. ['id' => 42, 'sort' => 7]); malformed input — invalid base64 or base64 of something that is not a JSON object/array — also returns null. Hint: the bug is wrong null handling — the broken branch returns [] for the null/'' sentinel, so the strict `=== null` check never fires and clients paginate forever.",
+      "starter_code": "function decode_cursor(?string $cursor): ?array {\n    if ($cursor === null || $cursor === '') {\n        return [];\n    }\n\n    $raw = base64_decode($cursor, true);\n\n    if ($raw === false) {\n        return null;\n    }\n\n    $decoded = json_decode($raw, true);\n\n    return is_array($decoded) ? $decoded : null;\n}",
+      "test_suite": "expect('null cursor means first page', decode_cursor(null), null);\nexpect('empty cursor means no next page', decode_cursor(''), null);\nexpect('decodes a well-formed cursor', decode_cursor(base64_encode(json_encode(['id' => 42, 'sort' => 7]))), ['id' => 42, 'sort' => 7]);\nexpect('invalid base64 returns null', decode_cursor('!!!not-base64!!!'), null);\nexpect('base64 of non-JSON returns null', decode_cursor('aGVsbG8='), null);",
+      "solution": "function decode_cursor(?string $cursor): ?array {\n    if ($cursor === null || $cursor === '') {\n        return null;\n    }\n\n    $raw = base64_decode($cursor, true);\n\n    if ($raw === false) {\n        return null;\n    }\n\n    $decoded = json_decode($raw, true);\n\n    return is_array($decoded) ? $decoded : null;\n}",
+      "rubric": null
+    },
+    {
+      "type": "scenario",
+      "title": "Keep a Laravel API alive through a 10-20x peak-traffic spike",
+      "difficulty": "hard",
+      "tags": ["scalability", "architecture", "redis", "queues", "autoscaling", "read-replicas", "observability"],
+      "description": "A Laravel REST API for a multi-tenant B2B SaaS runs at roughly 200 requests/second on a handful of instances, but a marketing push or one large tenant's campaign can spike traffic 10-20x for minutes to hours. Walk through how you would design the application and its infrastructure so it survives the spike with graceful degradation instead of falling over. Cover stateless app servers and session storage, a cache-first caching strategy, queue backpressure, database read replicas, autoscaling, graceful-degradation behaviour, and observability — and justify each decision.",
+      "starter_code": null,
+      "test_suite": null,
+      "solution": "Make every app server stateless and disposable: store sessions in Redis (SESSION_DRIVER=redis), keep uploads and generated artifacts in object storage, and ensure any instance behind the load balancer can serve any request — a spike is handled by adding instances, never by keeping sticky state alive. Autoscale horizontally on CPU utilization, request latency, and queue depth, and make boot fast: config:cache, route:cache, OPcache, and a prebuilt container image in a warm target group, so new capacity is ready in seconds rather than minutes.\n\nGo cache-first on shared Redis, never per-instance memory: hot queries, tenant/quota lookups, and expensive computed responses are served from cache with short TTLs, and the database is the fallback rather than the hot path. A shared cache also avoids the cold-cache stampede that would hit every fresh instance. Push all non-critical side effects — webhooks, emails, feed or report generation, AI calls — onto the queue so HTTP requests never block on slow work, and let the queue absorb the spike: scale workers, batch work, and delay or drop low-priority jobs instead of rejecting requests. Give retries exponential backoff plus a dead-letter policy so a saturated queue cannot trigger a retry storm.\n\nSend reads to MySQL read replicas while writes stay master-only, accept small replica lag for non-critical queries, and fall back reads to the master when a replica lags too far. Under overload, degrade deliberately: per-tenant rate limiting, short timeouts and circuit breakers around external dependencies, and stale-cache fallbacks when a dependency or the database is slow — shed optional features first. Finally, make behaviour visible: structured logs and request tracing, plus metrics for queue depth, replica lag, cache hit ratio, p95 latency, and error rate, feeding dashboards and alerts that drive the autoscaling and degradation decisions, with a runbook rehearsed for the spike.",
+      "rubric": {
+        "criteria": [
+          "Statelessness: sessions and state externalized to Redis/object storage, no sticky sessions or per-instance storage assumptions",
+          "Scaling: horizontal autoscaling triggers and fast instance bootstrapping (config/route caches, OPcache, prebuilt images)",
+          "Caching: cache-first design on shared Redis with sane TTLs and a stampede-avoidance story",
+          "Queues: async processing of side effects with backpressure, worker scaling, and a safe retry/backoff policy",
+          "Database: read/write split with replicas, replica-lag awareness, and fallback when a replica falls behind",
+          "Graceful degradation: per-tenant rate limiting, timeouts, circuit breakers, stale-cache fallbacks, shedding optional features",
+          "Observability: metrics, structured logs, and tracing wired to dashboards and alerts that drive the scaling decisions"
+        ],
+        "key_points": [
+          "Redis-backed sessions let any stateless instance serve any request; no session files on instance disks",
+          "Stateless containers behind a load balancer, autoscaling on CPU/latency/queue depth",
+          "config:cache + route:cache + OPcache + a prebuilt image keep instance boot in seconds during a spike",
+          "Cache-first with shared Redis and short TTLs; the database is the fallback, not the hot path",
+          "Side effects go to queues with worker autoscaling, batching, and exponential backoff to avoid retry storms",
+          "Reads hit replicas, writes stay master-only; monitor replication lag and route reads to the master when lag is high",
+          "Per-tenant rate limiting and circuit breakers on external calls; serve stale cache during dependency outages",
+          "Track queue depth, replica lag, cache hit ratio, p95 latency, and error rate in dashboards with alerts and runbooks"
+        ]
+      }
+    }
+  ]
+}

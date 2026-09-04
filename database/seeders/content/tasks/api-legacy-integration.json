@@ -1,0 +1,54 @@
+{
+  "topic_slug": "api-legacy-integration",
+  "tasks": [
+    {
+      "type": "snippet",
+      "title": "Parse the API version from a vendor Accept header",
+      "difficulty": "medium",
+      "tags": ["api-versioning", "content-negotiation", "http-headers", "regex"],
+      "description": "Implement parseApiVersion(string $acceptHeader): ?int. Given an Accept header that advertises the vendor media type application/vnd.api+json; version=N, return the requested version as an int, or null when no version parameter is present. Examples: parseApiVersion('application/vnd.api+json; version=2') returns 2; parseApiVersion('application/vnd.api+json') returns null. Matching must be case-insensitive, and extra parameters placed after the version (for example '; q=0.9') must be ignored.",
+      "starter_code": "function parseApiVersion(string $acceptHeader): ?int\n{\n    // your code here: extract the int after 'version=' for the\n    // application/vnd.api+json media type, or return null.\n}",
+      "test_suite": "expect('parses version 2', parseApiVersion('application/vnd.api+json; version=2'), 2);\nexpect('returns null when no version is present', parseApiVersion('application/vnd.api+json'), null);\nexpect('media type and version matching are case-insensitive', parseApiVersion('Application/VND.API+JSON; VERSION=7'), 7);\nexpect('ignores parameters that follow the version', parseApiVersion('application/vnd.api+json; version=3; q=0.9'), 3);\nexpect('finds the vendor media type among other ranges', parseApiVersion('text/html, application/vnd.api+json; version=5'), 5);",
+      "solution": "function parseApiVersion(string $acceptHeader): ?int\n{\n    if (preg_match('~application/vnd\\.api\\+json;\\s*version=(\\d+)~i', $acceptHeader, $matches)) {\n        return (int) $matches[1];\n    }\n\n    return null;\n}",
+      "rubric": null
+    },
+    {
+      "type": "debug",
+      "title": "Pagination builder lets a stale page param overwrite the new page",
+      "difficulty": "easy",
+      "tags": ["pagination", "query-parameters", "http", "debugging"],
+      "description": "paginateParams(array $params, int $page, int $perPage): array must return the query-parameter array for a paginated request: every key from $params is preserved except page and per_page, which are always replaced by the given $page and $perPage and appended last. Example: paginateParams(['status' => 'paid', 'page' => 1], 3, 25) must return ['status' => 'paid', 'page' => 3, 'per_page' => 25]. Hint: the broken version fills the result with the new page/per_page first and then copies the old params on top of them, so a stale page/per_page already present in $params silently overrides the caller's values.",
+      "starter_code": "function paginateParams(array $params, int $page, int $perPage): array\n{\n    $result = ['page' => $page, 'per_page' => $perPage];\n\n    foreach ($params as $key => $value) {\n        $result[$key] = $value;\n    }\n\n    return $result;\n}",
+      "test_suite": "expect('adds page and per_page to empty params', paginateParams([], 2, 25), ['page' => 2, 'per_page' => 25]);\nexpect('preserves existing filters', paginateParams(['status' => 'paid'], 2, 25), ['status' => 'paid', 'page' => 2, 'per_page' => 25]);\nexpect('caller page wins over stale value', paginateParams(['status' => 'paid', 'page' => 1, 'per_page' => 10], 4, 50), ['status' => 'paid', 'page' => 4, 'per_page' => 50]);\nexpect('chaining moves to the next page', paginateParams(paginateParams(['status' => 'paid'], 1, 25), 2, 25), ['status' => 'paid', 'page' => 2, 'per_page' => 25]);",
+      "solution": "function paginateParams(array $params, int $page, int $perPage): array\n{\n    unset($params['page'], $params['per_page']);\n\n    $params['page'] = $page;\n    $params['per_page'] = $perPage;\n\n    return $params;\n}",
+      "rubric": null
+    },
+    {
+      "type": "scenario",
+      "title": "Version a REST API while a legacy SOAP client must keep working",
+      "difficulty": "hard",
+      "tags": ["api-design", "api-versioning", "soap", "anti-corruption-layer", "deprecation-strategy"],
+      "description": "Your team is replacing a 15-year-old XML/SOAP order-management backend with a modern, versioned JSON REST API. Several enterprise clients run certified SOAP integrations and cannot migrate for at least another year, while the business wants all new clients on REST. As the senior engineer you must design the coexistence: how you version both surfaces, where XML-to-JSON translation happens so business logic is never duplicated or contaminated, how faults and errors map across the boundary, and how you eventually retire the SOAP endpoint without breaking anyone. Walk through your architecture and your deprecation/migration plan, then name the top risks you would watch for.",
+      "starter_code": null,
+      "test_suite": null,
+      "solution": "**Version both surfaces.** New REST clients get URI-prefixed versioning, e.g. /api/v2/orders: simple, cache-friendly and impossible to route to the wrong version; a vendor media type can later evolve a single resource without bumping the whole path. The SOAP contract is a first-class, versioned surface too: the WSDL is pinned and change-controlled, so any breaking edit follows the same rules as a REST version bump.\n\n**Anti-corruption layer.** Both transports are thin adapters in front of one shared application core (hexagonal layout). OrderController (REST) and OrderSoapEndpoint (SOAP) both call the same application services and translate at the boundary. XML types, SOAP faults, string-versus-numeric IDs, date/time formats, enums and legacy quirks live only inside the SOAP adapter and die there; nothing legacy-shaped leaks into the domain or the JSON model. One source of truth for business logic prevents the classic failure where the old and new paths drift into two different implementations. Fault mapping is explicit: SOAP faultcode/faultstring map to HTTP status codes plus an error payload. Recorded SOAP envelopes become contract tests, so every refactor proves wire-level compatibility.\n\n**Deprecation and cutover.** Meter usage per client credential from day one, publish a concrete sunset date in documentation, and emit a Sunset response header (plus a SOAP-side notice) so callers see the deadline in their own logs. Migrate clients one at a time behind a per-client flag, strangler-fig style: cut over the biggest client first, then the smallest, while parity monitoring compares SOAP and REST behaviour. Remove the SOAP adapter only once the last client has migrated.\n\n**Risks.** Hidden XML dependencies (fields you forgot exist), clients depending on quirks you 'fixed', WSDL/schema drift, and the temptation to port legacy bugs into the new core: document intended semantics instead of preserving accidents.",
+      "rubric": {
+        "criteria": [
+          "Explicit, justified versioning strategy for the REST API, with the SOAP/WSDL contract treated as a versioned surface of its own",
+          "Anti-corruption layer design: both transports are adapters over one shared core, with no duplicated or leaked logic",
+          "Complete translation story: field/format/enum conversion, fault-to-HTTP-error mapping, and contract tests at the boundary",
+          "Concrete deprecation and migration plan: per-client usage metrics, sunset date, Sunset header/notice, staged cutover",
+          "Risk identification: hidden XML dependencies, clients depending on quirks, WSDL drift, and dual-implementation drift"
+        ],
+        "key_points": [
+          "Both REST and SOAP are adapters in front of a single domain/application core; translation happens only at the boundary",
+          "Legacy XML types, SOAP faults and legacy quirks never leak into the domain or the new JSON model",
+          "URI-prefixed versioning (/api/v2) by default; vendor media type for finer-grained evolution; WSDL pinned and change-controlled",
+          "SOAP faults and HTTP errors are mapped explicitly, and recorded SOAP envelopes are replayed as contract tests",
+          "Legacy usage is metered per client; a Sunset header and documented deadline drive a per-client, staged cutover",
+          "The SOAP adapter is removed only after the last client migrates; port intended semantics, not legacy bugs"
+        ]
+      }
+    }
+  ]
+}

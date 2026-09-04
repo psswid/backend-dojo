@@ -1,0 +1,56 @@
+{
+  "topic_slug": "caching-redis",
+  "tasks": [
+    {
+      "type": "snippet",
+      "title": "Build a deterministic, versioned cache key",
+      "difficulty": "easy",
+      "tags": ["cache", "redis", "cache-key", "deterministic", "versioning"],
+      "description": "Implement cache_key(string $resource, int $version, array $parts): string — a deterministic, namespaced, versioned cache-key builder. Every key must start with the 'cache:' namespace, contain the resource name, embed the version as ':v{N}', then append each part separated by ':'. Parts must be appended in sorted order so that the same set of parts always yields the same key regardless of the order they are passed in (deterministic). Examples: cache_key('articles', 2, ['42', 'en']) === 'cache:articles:v2:42:en'; cache_key('articles', 2, ['en', '42']) === 'cache:articles:v2:42:en' (same key — order-independent); cache_key('articles', 3, ['en', '42']) === 'cache:articles:v3:42:en'; cache_key('users', 1, []) === 'cache:users:v1'.",
+      "starter_code": "function cache_key(string $resource, int $version, array $parts): string\n{\n    // your code here\n}",
+      "test_suite": "expect('basic key', cache_key('articles', 2, ['42', 'en']), 'cache:articles:v2:42:en');\nexpect('order-independent', cache_key('articles', 2, ['en', '42']), 'cache:articles:v2:42:en');\nexpect('version bump changes key', cache_key('articles', 3, ['en', '42']), 'cache:articles:v3:42:en');\nexpect('resource is isolated', cache_key('comments', 2, ['en', '42']), 'cache:comments:v2:42:en');\nexpect('empty parts', cache_key('users', 1, []), 'cache:users:v1');",
+      "solution": "function cache_key(string $resource, int $version, array $parts): string\n{\n    sort($parts, SORT_STRING);\n\n    $key = 'cache:' . $resource . ':v' . $version;\n\n    foreach ($parts as $part) {\n        $key .= ':' . $part;\n    }\n\n    return $key;\n}",
+      "rubric": null
+    },
+    {
+      "type": "debug",
+      "title": "Fix the inverted cache-stampede guard",
+      "difficulty": "medium",
+      "tags": ["cache", "redis", "stampede", "lock", "race-condition"],
+      "description": "should_recompute(bool $cacheHit, bool $holdsLock): bool is the decision core of a cache-stampede guard on a hot read path. Correct contract: it must return true ONLY when the cache MISSED and THIS request holds the recompute lock (it is the single winner that rebuilds the cache). A cache HIT must never trigger a recompute, and a request that lost the lock race must NOT recompute — it should wait briefly and re-read the cache, which the lock owner has just repopulated. Bug hint: the boolean logic is inverted — trace when the current code returns true on a hit and when it returns true without holding the lock; those are exactly the branches that cause wasted queries and a stampede of simultaneous recomputes into the database.",
+      "starter_code": "function should_recompute(bool $cacheHit, bool $holdsLock): bool\n{\n    return $cacheHit || !$holdsLock;\n}",
+      "test_suite": "expect('hit without lock: never recompute', should_recompute(true, false), false);\nexpect('hit with lock: still never recompute', should_recompute(true, true), false);\nexpect('miss without lock: wait, do not recompute', should_recompute(false, false), false);\nexpect('miss with lock: owner recomputes once', should_recompute(false, true), true);",
+      "solution": "function should_recompute(bool $cacheHit, bool $holdsLock): bool\n{\n    return !$cacheHit && $holdsLock;\n}",
+      "rubric": null
+    },
+    {
+      "type": "scenario",
+      "title": "Design caching for a hot, read-mostly product endpoint",
+      "difficulty": "hard",
+      "tags": ["cache", "redis", "cache-aside", "write-through", "stampede", "ttl", "invalidation"],
+      "description": "Your Laravel service exposes a product-details endpoint that is read thousands of times per second, while the underlying MySQL product data changes only a few times a day. Users report latency spikes during traffic peaks. Design a caching strategy and defend your choices: (1) pick a pattern — cache-aside vs write-through/read-through — and justify it for this read-heavy, write-light profile; (2) define the TTL policy and the write path (explicit invalidation and key versioning); (3) protect the endpoint from a cache stampede when a hot key expires, using Redis locks such as Cache::lock; (4) handle cache penetration (lookups for rows that do not exist), hot-key breakdown, and avalanche of many keys expiring at once; (5) state clearly when you would NOT cache a resource.",
+      "starter_code": null,
+      "test_suite": null,
+      "solution": "Start with **cache-aside** (lazy loading): read `Cache::get($key)`; on a miss, query MySQL, store the result under a versioned key with a TTL, and return it. Cache-aside fits this workload because reads dwarf writes and it avoids the write-path cost of write-through, which pays write latency to store values users may never read. Writes are rare, so make them explicit: on every product update call `Cache::forget($key)` — or better, embed a per-resource version in each key (`products:v3`) and bump it once, invalidating the whole class of keys in a single operation.\n\nA TTL is a safety net, not the correctness mechanism: pick a short-but-useful TTL (5–10 minutes for product data), rely on explicit invalidation for freshness, and add random jitter per key so related keys never expire in lock-step.\n\n**Cache stampede**: when the hot key expires at peak load, thousands of requests would all hit MySQL at once. Acquire an atomic lock — `Cache::lock($key, 10)->get()` — the winner recomputes and repopulates the cache while the losers `block()` briefly and then re-read, finding the fresh value. If the lock cannot be obtained in time, fall back to stale-while-revalidate: serve the previous value and refresh in the background.\n\n**Penetration / breakdown / avalanche**: cache short-lived negative results (or keep a bloom filter) so requests for absent ids never reach the store; never let the single hottest key expire cold — warm it proactively just before its TTL; spread expiries with jitter so thousands of keys do not vanish in the same second.\n\n**When NOT to cache**: per-user secrets, data already living in Redis (sessions, queues), values rewritten on nearly every request, and anything where even a few seconds of staleness is unacceptable (balances, counters, idempotency). Every cache is a disposable failure point: the source of truth must always be rebuildable, and you should monitor the hit ratio and alert on drops.",
+      "rubric": {
+        "criteria": [
+          "Chooses cache-aside for a read-heavy, write-light workload and explains why write-through/read-through is not worth its cost here",
+          "Defines TTL as a safety net plus explicit invalidation on writes, with key versioning for whole-class invalidation",
+          "Explains the stampede risk and gives a concrete lock-based guard (Cache::lock: one winner recomputes, losers wait and re-read, stale fallback)",
+          "Distinguishes penetration, hot-key breakdown, and avalanche and names a mitigation for each",
+          "States realistic cases where caching should be avoided and treats Redis as disposable rather than a source of truth"
+        ],
+        "key_points": [
+          "Cache-aside: read the cache, on miss load from MySQL, store with a TTL; best fit for reads >> writes",
+          "Write path: explicit invalidation (Cache::forget or bump products:vN) keeps data fresh; TTL alone is only a fallback",
+          "Key versioning lets a single bump invalidate every key of a resource at once",
+          "Stampede guard: atomic Cache::lock — only the lock owner recomputes, waiters block and re-read, stale-while-revalidate as last resort",
+          "Penetration: cache negative lookups for missing rows or use a bloom filter for absent ids",
+          "Breakdown: protect the single hottest key (proactive refresh, never let it expire cold)",
+          "Avalanche: jitter TTLs so many keys do not expire simultaneously",
+          "Anti-patterns: do not cache secrets, already-cached state, volatile per-request data, or perfectly-fresh-required data; monitor the hit ratio"
+        ]
+      }
+    }
+  ]
+}

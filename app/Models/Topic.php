@@ -27,6 +27,11 @@ class Topic extends Model
         return $this->hasMany(Question::class)->orderBy('sort_order');
     }
 
+    public function tasks(): HasMany
+    {
+        return $this->hasMany(Task::class)->orderBy('sort_order');
+    }
+
     public function resources(): HasMany
     {
         return $this->hasMany(Resource::class)->orderBy('sort_order');

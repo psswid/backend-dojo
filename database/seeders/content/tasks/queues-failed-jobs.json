@@ -1,0 +1,56 @@
+{
+  "topic_slug": "queues-failed-jobs",
+  "tasks": [
+    {
+      "type": "snippet",
+      "title": "backoff_delay(): exponential backoff with a hard cap",
+      "difficulty": "easy",
+      "tags": ["queues", "retries", "backoff"],
+      "description": "Implement backoff_delay(int $attempt): int, which returns how many seconds to wait before retry attempt $attempt (1-based: attempt 1 is the first retry). The delay doubles with every attempt, starting at 2 seconds, and must never exceed the 3600-second cap. Examples: backoff_delay(1) returns 2, backoff_delay(10) returns 1024, backoff_delay(12) returns 3600 (2**12 = 4096 is capped).",
+      "starter_code": "function backoff_delay(int $attempt): int\n{\n    // your code here\n}",
+      "test_suite": "expect('first retry waits 2s', backoff_delay(1), 2);\nexpect('exponential growth at attempt 5', backoff_delay(5), 32);\nexpect('attempt 10 waits 1024s', backoff_delay(10), 1024);\nexpect('cap kicks in at attempt 12', backoff_delay(12), 3600);\nexpect('cap holds for huge attempts', backoff_delay(100), 3600);",
+      "solution": "function backoff_delay(int $attempt): int\n{\n    return min(2 ** $attempt, 3600);\n}",
+      "rubric": null
+    },
+    {
+      "type": "debug",
+      "title": "should_retry(): off-by-one grants a job one attempt too many",
+      "difficulty": "medium",
+      "tags": ["queues", "retries", "off-by-one"],
+      "description": "A job may run at most $maxAttempts times in total. Given how many times it has already run ($attempt, 1-based), should_retry(int $attempt, int $maxAttempts): bool must return true only while budget remains for another run. Hint: the boundary comparison is off by one — when the current attempt equals the maximum, the job must NOT be retried, but the <= comparison schedules one extra attempt beyond the budget. Examples: should_retry(2, 3) returns true, should_retry(3, 3) returns false, should_retry(1, 1) returns false.",
+      "starter_code": "function should_retry(int $attempt, int $maxAttempts): bool\n{\n    return $attempt <= $maxAttempts;\n}",
+      "test_suite": "expect('first run still has budget of 3', should_retry(1, 3), true);\nexpect('second run still has budget of 3', should_retry(2, 3), true);\nexpect('third run exhausts the budget of 3', should_retry(3, 3), false);\nexpect('past budget never retries', should_retry(4, 3), false);\nexpect('single-shot job never retries', should_retry(1, 1), false);",
+      "solution": "function should_retry(int $attempt, int $maxAttempts): bool\n{\n    return $attempt < $maxAttempts;\n}",
+      "rubric": null
+    },
+    {
+      "type": "scenario",
+      "title": "Design failed-job handling for a Laravel queue consumer",
+      "difficulty": "hard",
+      "tags": ["queues", "failed_jobs", "idempotency", "at-least-once", "poison-pill"],
+      "description": "A webhook job in a Laravel app calls a third-party billing API that intermittently returns 5xx, and occasionally receives a permanently malformed payload. Right now a failure kills the job silently and nothing is logged or retried. Design the failed-job handling end to end: the retry strategy on the job class, how you treat transient vs permanent failures, idempotency of the side effect, what happens after the last retry (failed_jobs table, failed() hook), and how you protect workers from poison pills.",
+      "starter_code": null,
+      "test_suite": null,
+      "solution": "Start from delivery semantics: Laravel queues give at-least-once delivery — a worker can crash after popping a job but before its side effect commits, so a job may run more than once. Exactly-once is not achievable in a distributed system, so the design builds an idempotent consumer first and layers retry policy on top.\n\nOn the job class, replace the defaults with an explicit strategy: a retry cap such as public $tries = 5, or better a retryUntil set to now()->addMinutes(30) when retries must stop at a wall-clock deadline, plus a backoff() returning an exponential sequence like [5, 15, 60, 300] so transient outages do not hammer the endpoint. Classify failures: a permanently malformed payload will never succeed, so catch it and call $this->fail() to send the job straight to failed_jobs instead of burning retries; let 5xx responses and timeouts bubble up as retryable.\n\nMake the side effect idempotent so duplicates are harmless: persist the external event/order identifier and back it with a unique DB constraint, or record processed ids, so a re-delivered job becomes a no-op.\n\nWhen tries are exhausted the job lands in the failed_jobs table. Implement the failed(Throwable $e) hook (or a Queue::failing listener) to log the payload, page on-call, and copy it to a dead-letter store for replay; operators can inspect and requeue entries with php artisan queue:failed and queue:retry.\n\nA poison-pill job that always fails is bounded by tries and ends in failed_jobs, so it cannot stall a healthy worker. The subtler risks are jobs that never finish: give every job a timeout, monitor queue depth and latency with Horizon, and drain workers with --stop-when-empty or --max-time during deploys so in-flight work completes before code changes underneath it.",
+      "rubric": {
+        "criteria": [
+          "States that queue delivery is at-least-once, so consumers must be idempotent, and explains why exactly-once is not achievable.",
+          "Configures tries/retryUntil and a capped, exponential backoff() instead of relying on queue defaults.",
+          "Separates permanent from transient failures: permanent errors fast-fail via $this->fail(), transient ones retry.",
+          "Designs idempotency (persisted external id backed by a unique constraint or processed-id record).",
+          "Defines the failed()/Queue::failing hook with alerting and a dead-letter path, plus queue:failed/queue:retry for replay.",
+          "Handles poison pills via retry bounds, per-job timeouts, Horizon monitoring, and worker draining during deploys."
+        ],
+        "key_points": [
+          "At-least-once: duplicates happen by design; exactly-once is not achievable in distributed systems.",
+          "retryUntil time-boxes retries; exponential backoff with a cap backs off gracefully.",
+          "Permanent errors fail fast via $this->fail(); transient errors are retried.",
+          "failed_jobs table plus the failed() hook provide logging, alerting, and dead-letter replay.",
+          "php artisan queue:failed / queue:retry let operators inspect and requeue dead jobs.",
+          "Poison pills are bounded by tries; guard against never-finishing jobs with timeouts and Horizon monitoring.",
+          "Drain workers on deploy (--stop-when-empty / --max-time) so in-flight work finishes cleanly."
+        ]
+      }
+    }
+  ]
+}
