@@ -2,9 +2,14 @@
 
 namespace App\Services\Llm;
 
+use Generator;
 use Illuminate\Support\Facades\Http;
 use Prism\Prism\Enums\Provider;
 use Prism\Prism\Facades\Prism;
+use Prism\Prism\Streaming\Events\TextDeltaEvent;
+use Prism\Prism\ValueObjects\Messages\AssistantMessage;
+use Prism\Prism\ValueObjects\Messages\SystemMessage;
+use Prism\Prism\ValueObjects\Messages\UserMessage;
 use Throwable;
 
 /**
@@ -71,12 +76,56 @@ class LlmService
         $request = Prism::text()
             ->using(Provider::OpenAI, $this->model())
             ->withMaxTokens($maxTokens)
-            ->withMessages($messages);
+            ->withMessages($this->mapMessages($messages));
 
         if ($system !== null) {
             $request = $request->withSystemPrompt($system);
         }
 
         return $request->asText()->text;
+    }
+
+    /**
+     * Streaming multi-turn chat completion. Yields the raw text deltas as the
+     * model produces them (used with Livewire's `wire:stream` for a live chat UI).
+     *
+     * @param  array<int, array{role: string, content: string}>  $messages
+     * @return Generator<int, string>
+     *
+     * @throws Throwable
+     */
+    public function chatStream(array $messages, ?string $system = null, int $maxTokens = 1024): Generator
+    {
+        $request = Prism::text()
+            ->using(Provider::OpenAI, $this->model())
+            ->withMaxTokens($maxTokens)
+            ->withMessages($this->mapMessages($messages));
+
+        if ($system !== null) {
+            $request = $request->withSystemPrompt($system);
+        }
+
+        foreach ($request->asStream() as $event) {
+            if ($event instanceof TextDeltaEvent && $event->delta !== '') {
+                yield $event->delta;
+            }
+        }
+    }
+
+    /**
+     * Map OpenAI-style {role, content} arrays to Prism Message value objects.
+     *
+     * @param  array<int, array{role: string, content: string}>  $messages
+     * @return array<int, UserMessage|AssistantMessage|SystemMessage>
+     */
+    private function mapMessages(array $messages): array
+    {
+        return array_map(function (array $message) {
+            return match ($message['role'] ?? 'user') {
+                'assistant' => new AssistantMessage($message['content'] ?? ''),
+                'system' => new SystemMessage($message['content'] ?? ''),
+                default => new UserMessage($message['content'] ?? ''),
+            };
+        }, $messages);
     }
 }

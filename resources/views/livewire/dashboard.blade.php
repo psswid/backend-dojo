@@ -21,6 +21,20 @@
             </span>
         </div>
 
+        {{-- AI Mentor personas --}}
+        <div class="mb-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            @foreach (config('personas.personas', []) as $persona)
+                <a href="{{ route('mentor') }}" wire:navigate
+                   class="bg-white shadow-sm rounded-xl p-5 hover:shadow-md transition">
+                    <div class="flex items-center gap-2 mb-2">
+                        <span class="text-2xl">{{ $persona['icon'] }}</span>
+                        <h3 class="font-semibold text-gray-900">{{ $persona['name'] }}</h3>
+                    </div>
+                    <p class="text-sm text-gray-500">{{ $persona['description'] }}</p>
+                </a>
+            @endforeach
+        </div>
+
         {{-- Overall stats --}}
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
             <div class="bg-white overflow-hidden shadow-sm rounded-xl p-5">

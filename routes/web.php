@@ -30,6 +30,10 @@ Route::get('tasks/{task}', fn (Task $task) => view('task', ['task' => $task]))
     ->middleware(['auth', 'verified'])
     ->name('tasks.show');
 
+Route::view('mentor', 'mentor')
+    ->middleware(['auth', 'verified'])
+    ->name('mentor');
+
 Route::view('profile', 'profile')
     ->middleware(['auth'])
     ->name('profile');
