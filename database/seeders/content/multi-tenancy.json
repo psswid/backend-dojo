@@ -1,0 +1,421 @@
+{
+  "topic": {
+    "slug": "multi-tenancy",
+    "name": "Multi-Tenancy",
+    "description": "Designing and migrating multi-tenant Laravel/Symfony applications: tenancy models, data isolation, scoping, and tenant-aware infrastructure.",
+    "color": "#f59e0b",
+    "icon": "🏢",
+    "sort_order": 3
+  },
+  "resources": [
+    {
+      "title": "Tenancy for Laravel (stancl/tenancy) v3 — Introduction",
+      "url": "https://tenancyforlaravel.com/docs/v3/introduction",
+      "type": "docs",
+      "summary": "Official docs for stancl/tenancy v3: the central application vs tenant applications split, tenancy bootstrappers, and how tenant-aware connections, cache, and filesystems are swapped in per tenant."
+    },
+    {
+      "title": "Multi-tenant SaaS database tenancy patterns (Azure Architecture Center)",
+      "url": "https://learn.microsoft.com/en-us/azure/azure-sql/database/saas-tenancy-app-design-patterns",
+      "type": "article",
+      "summary": "Canonical industry walk-through of pooled (shared DB with tenant_id), isolated (database-per-tenant) and hybrid tenancy models with their cost, isolation, and operational trade-offs."
+    },
+    {
+      "title": "Implementing Multi-Tenancy in Laravel — A Comprehensive Guide (DEV Community)",
+      "url": "https://dev.to/zoran_bogoevski_78d62459b/implementing-multi-tenancy-in-laravel-a-comprehensive-guide-3735",
+      "type": "article",
+      "summary": "End-to-end practical guide to multi-tenancy in Laravel: tenant resolution, global scoping, connection management, and common pitfalls."
+    },
+    {
+      "title": "Multi-Tenancy in Laravel: Database-per-Tenant vs. Shared Database (DEV Community)",
+      "url": "https://dev.to/wb_crm/multi-tenancy-in-laravel-database-per-tenant-vs-shared-database-a-practical-guide-3f0j",
+      "type": "article",
+      "summary": "Practical comparison of the two dominant tenancy models and the signals that should push you from a shared tenant_id schema toward per-tenant databases."
+    },
+    {
+      "title": "Tenancy for Laravel v3 — Single-database tenancy",
+      "url": "https://tenancyforlaravel.com/docs/v3/single-database-tenancy",
+      "type": "docs",
+      "summary": "Official guidance for scoping a shared database: the BelongsToTenant trait on primary models, BelongsToPrimaryModel for secondary models, tenant-scoped unique indexes, scoped validation, and the withoutTenancy() escape hatch."
+    },
+    {
+      "title": "Laravel docs — Eloquent: Global Scopes",
+      "url": "https://laravel.com/docs/11.x/eloquent#global-scopes",
+      "type": "docs",
+      "summary": "How to register closure scopes or Scope classes that constrain every query on a model, and how to remove them with withoutGlobalScope(s)."
+    }
+  ],
+  "questions": [
+    {
+      "type": "single",
+      "prompt": "You are designing a new SaaS and must pick a tenancy data model. Which model stores every tenant's rows in the same physical tables and separates them with a discriminator column such as tenant_id on each tenant-owned table?",
+      "options": [
+        "A single shared database: one set of tables, each tenant-owned row carrying a tenant_id column (the 'pooled' model)",
+        "Database-per-tenant: every tenant gets its own separate database (tenant1, tenant2, ...)",
+        "Schema-per-tenant: one database containing a separate Postgres schema per tenant",
+        "A hybrid model where every tenant always gets its own database instance on its own server"
+      ],
+      "correct": [0],
+      "explanation": "The shared-database (pooled) model keeps one schema for all tenants and discriminates rows with a tenant_id column. Its appeal is operational simplicity: one database to back up, migrate, and monitor, and cross-tenant analytics are trivial joins. The price is that isolation is an application concern: every query path must be scoped to the current tenant, and one heavy tenant can degrade everyone else (noisy neighbor). The other options trade ops complexity for isolation: database-per-tenant gives hard physical separation but multiplies migrations, backups, connection pools, and provisioning (in stancl/tenancy you run php artisan tenants:migrate across every tenant database), while schema-per-tenant sits between the two on Postgres, offering logical separation inside one database by switching the connection's search_path or schema. Senior interviewers expect you to name the shared/tenant_id model as the cheapest to operate and the one that demands the most discipline in code.",
+      "difficulty": "easy",
+      "tags": ["multi-tenancy", "tenancy-models", "data-isolation"],
+      "resources": [
+        {
+          "title": "Multi-tenant SaaS database tenancy patterns (Azure Architecture Center)",
+          "url": "https://learn.microsoft.com/en-us/azure/azure-sql/database/saas-tenancy-app-design-patterns",
+          "type": "article",
+          "summary": "Pooled vs isolated vs hybrid tenancy models and their trade-offs."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "In a shared-database Laravel app, you want every query on a tenant-owned model (e.g. Order) to automatically include WHERE tenant_id = <current tenant>. What is the idiomatic Laravel mechanism for that?",
+      "options": [
+        "A global scope added in the model's booted() method via static::addGlobalScope(), implemented as a closure or a Scope class whose apply() method constrains the query builder",
+        "An Eloquent observer hooked to the model's retrieving event",
+        "A middleware that rewrites the generated SQL for every request",
+        "A database trigger that appends the tenant predicate on SELECT"
+      ],
+      "correct": [0],
+      "explanation": "Laravel's global scopes are exactly this tool: in booted() you call static::addGlobalScope(new TenantScope), and the Scope interface's apply(Builder $builder, Model $model) method runs $builder->where('tenant_id', $currentTenantId) for every query that goes through the Eloquent model - selects, eager loads, and even model-based updates and deletes. A closure scope (static::addGlobalScope(fn (Builder $b) => $b->where('tenant_id', tenant('id')))) is the lightweight variant. Because scoping logic lives on the model, a junior dev adding a controller that queries Order is automatically protected - that is the whole point. Two caveats a senior must state: scopes apply only to Eloquent query paths (DB::table('orders') bypasses them), and a scope whose closure returns early when there is no current tenant silently disables isolation, so tenant scopes should fail closed or only be used where tenant context is guaranteed.",
+      "difficulty": "easy",
+      "tags": ["laravel", "global-scopes", "scoping"],
+      "resources": [
+        {
+          "title": "Laravel docs — Eloquent: Global Scopes",
+          "url": "https://laravel.com/docs/11.x/eloquent#global-scopes",
+          "type": "docs",
+          "summary": "Registering and removing global scopes on Eloquent models."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "Using stancl/tenancy v3 in database-per-tenant mode, where do you put migrations that create the tables living inside each tenant's database, and how do you apply them to every tenant?",
+      "options": [
+        "In database/migrations/tenant, executed per tenant with php artisan tenants:migrate",
+        "In database/migrations together with central migrations, executed with php artisan migrate --tenant",
+        "In database/migrations/central, executed with php artisan tenants:migrate",
+        "Nowhere special: the DatabaseTenancyBootstrapper replays central migrations into each tenant database automatically on every request"
+      ],
+      "correct": [0],
+      "explanation": "stancl/tenancy separates migration concerns: central-database schema (the tenants table, domains table, central users) goes in database/migrations and runs with the normal php artisan migrate; tenant schema goes in database/migrations/tenant and is applied to every tenant database with php artisan tenants:migrate (you can filter with --tenants=... or target a single tenant). Because tenants:migrate runs against each tenant connection, tenant migrations run outside any request tenant context - the artisan process iterates tenants and boots tenancy per tenant. Two details interviewers probe: all migrations share one PHP namespace, so central and tenant migration class names must be unique even if they create same-named tables, and tenant migrations also fire automatically when a tenant is created via the MigrateDatabase job listening on the TenantCreated event. Directory paths are configurable through migration_parameters.paths in config/tenancy.php.",
+      "difficulty": "easy",
+      "tags": ["stancl-tenancy", "migrations", "database-per-tenant"],
+      "resources": [
+        {
+          "title": "Tenancy for Laravel v3 — Migrations",
+          "url": "https://tenancyforlaravel.com/docs/v3/migrations",
+          "type": "docs",
+          "summary": "database/migrations/tenant directory and php artisan tenants:migrate."
+        },
+        {
+          "title": "Tenancy for Laravel v3 — Console Commands",
+          "url": "https://tenancyforlaravel.com/docs/v3/console-commands",
+          "type": "docs",
+          "summary": "Tenant-aware artisan commands and the --tenants filter."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "A request arrives for https://acme.example.com. In a stancl/tenancy application, how is the tenant normally identified and resolved for that request?",
+      "options": [
+        "The hostname (the acme subdomain) is matched against the stored tenant domains early in the request lifecycle, and the matching tenant is booted",
+        "The first path segment of the URL is always used as the tenant identifier",
+        "The Accept-Language header is parsed to guess the tenant",
+        "A random per-request token stored in the session identifies the tenant"
+      ],
+      "correct": [0],
+      "explanation": "Subdomain-based resolution is the default in stancl/tenancy: each Tenant record owns rows in the central domains table, and identification happens early in the request lifecycle (before routing, via the package's identification/bootstrapping pipeline) by matching the request host against that table, then initializing tenancy so connection, cache, and filesystem bootstrappers swap in tenant resources. Subdomain resolution is clean for users and makes tenant context unambiguous per URL, but demands wildcard DNS and per-domain TLS certificates. Interviewers also want the trade-offs of the alternatives: path-based resolution (example.com/acme/...) avoids DNS and certificate sprawl but forces every route, URL generator, asset link, and reverse-proxy rule to carry the segment; header-based resolution (e.g. X-Tenant or a JWT claim) fits API/B2B token flows but breaks browser use and can be spoofed unless authenticated. Whatever the mechanism, resolution must happen before any tenant-dependent code - that is why it is done in middleware/bootstrappers rather than lazily inside controllers.",
+      "difficulty": "easy",
+      "tags": ["multi-tenancy", "tenant-resolution", "stancl-tenancy"],
+      "resources": [
+        {
+          "title": "Tenancy for Laravel v3 — Introduction",
+          "url": "https://tenancyforlaravel.com/docs/v3/introduction",
+          "type": "docs",
+          "summary": "The central vs tenant application split and how tenants are booted per request."
+        }
+      ]
+    },
+    {
+      "type": "multi",
+      "prompt": "Your SaaS runs on a single shared database where tenant-owned tables carry a tenant_id column and every query is scoped by a global scope. Which of the following pressures legitimately justify migrating at least some tenants to database-per-tenant or schema-per-tenant isolation? Select all that apply.",
+      "options": [
+        "A noisy tenant runs heavy ad-hoc queries that exhaust connection pools or lock hot tables, degrading response times for every other tenant",
+        "A customer contract requires you to physically delete or legally segregate all of that customer's data, or to keep data inside a specific jurisdiction (data residency)",
+        "You need per-tenant backup/restore points and the ability to migrate or roll back one tenant's schema without touching anyone else",
+        "A composite index on (tenant_id, slug) is slightly slower than a plain unique index on slug, so you want per-tenant tables to keep indexes small",
+        "Your product team wants a single SQL query that aggregates revenue across all tenants for the CFO dashboard",
+        "Your tables have grown to tens of millions of shared rows, shared hot tables cause lock contention, and you cannot keep per-tenant retention or archival policies"
+      ],
+      "correct": [0, 1, 2, 5],
+      "explanation": "The shared/tenant_id model breaks down under exactly these pressures: noisy-neighbor isolation (one tenant's load or locks hurting everyone), compliance and residency (physically deleting or segregating a tenant's rows out of shared tables is painful and risky; per-tenant databases let you drop or encrypt an entire database), per-tenant operational lifecycle (backups, restores, schema rollouts at each tenant's own pace), and scale (huge shared tables, index bloat, lock contention, no per-tenant archival). The wrong options are traps about what isolation does NOT buy: per-tenant schema does not remove the need for a (tenant_id, slug) composite index - that index was always the right design, and the distractor about plain unique indexes being faster confuses index size with correctness (a plain unique index on slug would still forbid two tenants from using the same slug); and cross-tenant CFO reporting actually becomes HARDER after isolation, because data now spans many databases - one of the real migration costs you must budget for (warehouse, dblink, or application-side aggregation). Schema-per-tenant on Postgres is a middle path: logical isolation with per-schema migrations and tenants, but one server and one connection story via search_path switching.",
+      "difficulty": "medium",
+      "tags": ["tenancy-models", "data-isolation", "migration", "scale"],
+      "resources": [
+        {
+          "title": "Multi-tenant SaaS database tenancy patterns (Azure Architecture Center)",
+          "url": "https://learn.microsoft.com/en-us/azure/azure-sql/database/saas-tenancy-app-design-patterns",
+          "type": "article",
+          "summary": "When pooled, isolated, and hybrid models each make sense."
+        },
+        {
+          "title": "Multi-Tenancy in Laravel: Database-per-Tenant vs. Shared Database (DEV Community)",
+          "url": "https://dev.to/wb_crm/multi-tenancy-in-laravel-database-per-tenant-vs-shared-database-a-practical-guide-3f0j",
+          "type": "article",
+          "summary": "Practical signals for moving off a shared schema."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "Trap question. A shared-database Laravel app scopes orders with a global scope that adds ->where('tenant_id', Tenant::current()?->id). Tenant::current() returns null outside HTTP requests. A scheduled job iterates Order::cursor() at 03:00 to build nightly digests. What happens, and why is it dangerous?",
+      "options": [
+        "The scope becomes a no-op when Tenant::current() is null, so the job silently reads and processes orders from every tenant",
+        "The job throws a QueryException because tenant_id can never be null in the where clause",
+        "The job only processes orders belonging to the tenant stored in the previous HTTP request's session",
+        "Laravel detects the missing tenant context and re-runs the job inside the most recently active tenant automatically"
+      ],
+      "correct": [0],
+      "explanation": "This is the classic silent-isolation-loss bug. The closure uses the null-safe operator: when no tenant is set (queue workers, scheduled commands, tinker, console imports - anything outside the HTTP lifecycle where tenant identification middleware ran), Tenant::current() is null, the expression evaluates to null, and Laravel's where('tenant_id', null) clause is dropped entirely - so the query returns every tenant's rows. No exception, no log entry, just a quiet full-table read at 3 a.m. that can dump tenant B's data into tenant A's digest. The failure mode you must defend: tenant scoping must fail closed, never open. Options include throwing when tenant context is missing for tenant-owned models, refusing to boot tenant-dependent jobs outside a tenant, or keeping tenant data in per-tenant databases so there is nothing to leak. A senior answer also names the test that catches it: an integration test that runs the job with no tenant booted and asserts the query returns zero rows or throws - and one impersonating tenant A asserting tenant B's rows are unreachable.",
+      "difficulty": "medium",
+      "tags": ["global-scopes", "trap", "queues", "data-leak"],
+      "resources": [
+        {
+          "title": "Laravel docs — Eloquent: Global Scopes",
+          "url": "https://laravel.com/docs/11.x/eloquent#global-scopes",
+          "type": "docs",
+          "summary": "How scopes are applied and removed on model queries."
+        },
+        {
+          "title": "Tenancy for Laravel v3 — Queues",
+          "url": "https://tenancyforlaravel.com/docs/v3/queues",
+          "type": "docs",
+          "summary": "Why long-running queue workers need explicit tenant context."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "Your multi-tenant app (any tenancy model) uses one shared Redis for caching, and several tenants cache data under the same logical key (e.g. 'settings' or 'dashboard.stats'). Which design is correct?",
+      "options": [
+        "Namespace cache keys per tenant - prefix them with the tenant id, or rely on stancl/tenancy's cache/Redis tenancy bootstrappers to add the tenant prefix automatically when tenancy is booted",
+        "Keep global keys but shorten TTLs so cross-tenant collisions expire quickly",
+        "Store per-tenant cache inside each tenant's database session table instead of Redis",
+        "Only cache values that are identical for all tenants, and never cache tenant-specific data"
+      ],
+      "correct": [0],
+      "explanation": "A shared cache without tenant partitioning is a cross-tenant data leak and a correctness bug: tenant A stores 'settings' under the global key, tenant B reads it and sees A's configuration, and last-writer-wins makes values flicker between tenants. The fix is to namespace the cache by tenant: either manually prefix keys with the tenant id (Cache::put('tenant_' . $tenantId . ':settings', ...)) or, in stancl/tenancy, let the CacheTenancyBootstrapper and RedisTenancyBootstrapper handle it - they make the cache and Redis prefixes tenant-specific while tenancy is booted, so standard Cache::put/get calls are automatically isolated per tenant. Two nuances senior candidates mention: data that is genuinely global (feature flags, shared reference data) must live in a central, un-prefixed store on purpose (the package exposes central cache helpers/connections), and queue workers must have the tenant booted before touching cache, otherwise they write into the wrong (or an unpolluted/central) namespace - the same tenant-context problem that plagues jobs. Per-tenant Redis logical databases or key prefixes are both acceptable; the requirement is deterministic isolation, not the specific mechanism.",
+      "difficulty": "medium",
+      "tags": ["cache", "multi-tenancy", "tenant-aware-cache"],
+      "resources": [
+        {
+          "title": "Tenancy for Laravel v3 — Tenancy bootstrappers",
+          "url": "https://tenancyforlaravel.com/docs/v3/tenancy-bootstrappers",
+          "type": "docs",
+          "summary": "Cache and Redis bootstrappers that namespace tenant resources."
+        },
+        {
+          "title": "Laravel docs — Cache",
+          "url": "https://laravel.com/docs/11.x/cache",
+          "type": "docs",
+          "summary": "Cache stores, keys, and drivers in Laravel."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "Scenario: your team adopts stancl/tenancy v3 in database-per-tenant mode and ships a signup flow where a new customer subscribes through a public website. Describe, step by step, how you would provision a brand-new tenant: what creating the Tenant record triggers, in what order schema, seed data, admin user, and domain are created, how the request that started it all stays fast, and how you make provisioning resilient to failures.",
+      "options": [],
+      "correct": [],
+      "explanation": "Model answer. In stancl/tenancy v3, provisioning is event-driven: creating a Tenant (Tenant::create([...]) with an id - by default a uuid or your chosen key) fires the TenantCreated event, and the package's configured listeners run the provisioning jobs in order: CreateDatabase (creates the tenant database, by default named from tenancy.database.prefix/suffix, e.g. tenant_{id}), then MigrateDatabase (runs php artisan tenants:migrate logic against that one database), then SeedDatabase. Your own listeners add what the package does not know about: seeding tenant base data (settings, plan defaults, roles/permissions) and creating the tenant's first admin user with a one-time setup token, then attaching the tenant's domain via $tenant->domains()->create(['domain' => 'acme.example.com']) so the subdomain resolves. Because migration and seeding of a fresh database can take seconds, run the provisioning jobs on the queue rather than synchronously in the signup request; the API/UI should return immediately and the tenant record should carry a provisioning state machine (e.g. provisioning -> active/failed) so requests to a not-yet-active tenant get a friendly 503/retry page. Resiliency requirements: every provisioning job must be idempotent and retryable (rerunning MigrateDatabase must be safe; CreateDatabase should tolerate an existing database), a failed job must mark the tenant failed and trigger cleanup (drop a half-created database, delete the Tenant row) or alerting, and there should be operational escape hatches for backfilling legacy tenants: php artisan tenants:migrate --tenants=... to run schema on an existing tenant, tenants:seed for data, and the console-commands page documents tenant-aware variants. Mention that a single synchronous Tenant::create in tests/factories bypasses queues by design, and that you deliberately separate central identity (the Tenant and central User records) from tenant-local identity.",
+      "difficulty": "medium",
+      "tags": ["onboarding", "provisioning", "stancl-tenancy", "design"],
+      "resources": [
+        {
+          "title": "Tenancy for Laravel v3 — Introduction",
+          "url": "https://tenancyforlaravel.com/docs/v3/introduction",
+          "type": "docs",
+          "summary": "Events and jobs fired when a tenant is created."
+        },
+        {
+          "title": "Tenancy for Laravel v3 — Migrations",
+          "url": "https://tenancyforlaravel.com/docs/v3/migrations",
+          "type": "docs",
+          "summary": "Per-tenant schema application including tenants:migrate."
+        },
+        {
+          "title": "Tenancy for Laravel v3 — Console Commands",
+          "url": "https://tenancyforlaravel.com/docs/v3/console-commands",
+          "type": "docs",
+          "summary": "Tenant-aware artisan commands for operational backfills."
+        }
+      ]
+    },
+    {
+      "type": "multi",
+      "prompt": "You are auditing a shared-database Laravel app where a global scope guards the Order model with the current tenant. Which of the following code paths can still expose another tenant's rows? Select all that apply.",
+      "options": [
+        "A Scout/Meilisearch or Elasticsearch import that syncs Order models into a search index that is not partitioned by tenant",
+        "An internal reporting feature built with DB::table('orders')->select(...) instead of the Order model",
+        "A direct query on a secondary model (e.g. OrderItem::all()) whose only link to the tenant is a belongsTo relationship to the scoped Order parent",
+        "A queued job dispatched while no tenant context was initialized that queries Order, if the scope silently no-ops without a tenant",
+        "An eager-loaded chain Order::with('items')->get() where items belongsTo Order",
+        "Adding a nullable columns migration to the orders table"
+      ],
+      "correct": [0, 1, 2, 3],
+      "explanation": "These are the four classic leak vectors in shared-database tenancy. (1) Search indices are outside the database: if the index is not filtered/scoped by tenant, autocomplete and search APIs return other tenants' documents even though the Eloquent query was clean - you must store and filter the tenant id in the index. (2) The query builder (DB facade, or a Query\\Builder built without a model) bypasses Eloquent global scopes entirely - stancl/tenancy's own docs warn that low-level database queries are never scoped. (3) Secondary models are only safe when reached through a scoped parent relationship; calling OrderItem::all() directly has no tenant predicate, because the global scope lives on Order. stancl's answer is the BelongsToPrimaryModel trait, which scopes such queries by loading through the parent relationship - and deeper chains (Vote belongsTo OrderItem belongsTo Order) still need care. (4) Jobs outside tenant context re-open the door whenever the scope does not fail closed. The safe options are traps: eager loading items through Order is exactly the recommended path (children inherit the parent's scope), and migrations change schema, not row visibility. A senior audit names all four surfaces and then adds the defense-in-depth layer (row-level security at the database) that covers the ones code cannot.",
+      "difficulty": "medium",
+      "tags": ["data-leak", "scoping", "security", "audit"],
+      "resources": [
+        {
+          "title": "Tenancy for Laravel v3 — Single-database tenancy",
+          "url": "https://tenancyforlaravel.com/docs/v3/single-database-tenancy",
+          "type": "docs",
+          "summary": "Primary vs secondary models, BelongsToPrimaryModel, and unscoped low-level queries."
+        },
+        {
+          "title": "Laravel docs — Eloquent: Global Scopes",
+          "url": "https://laravel.com/docs/11.x/eloquent#global-scopes",
+          "type": "docs",
+          "summary": "Scope application and removal on Eloquent models."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "Trap question. Your shared-database Postgres app already scopes tenant data in Eloquent, and you now enable row-level security (RLS): each tenant-owned table gets a policy that compares current_setting('app.tenant_id') to the row's tenant_id, and the Laravel app sets that setting when handling a request. Which statement about the result is correct?",
+      "options": [
+        "RLS also protects raw SQL and DB::table() queries that Eloquent global scopes can never reach - but only if every connection that touches data, including queue workers and pooled connections, has the tenant set first; a forgotten or lingering setting silently returns zero rows, or everything if the policy is permissive",
+        "Now that RLS is enabled, the Eloquent global scopes are redundant and should be removed to avoid double filtering",
+        "RLS policies are evaluated per database role, so you must create one Postgres role per tenant for this to work at all",
+        "RLS only filters SELECT statements; UPDATE and DELETE always bypass it"
+      ],
+      "correct": [0],
+      "explanation": "This is defense in depth, not replacement. RLS is enforced by the database on every command - SELECT, UPDATE, DELETE (and INSERT via WITH CHECK), including raw DB::table() queries and even SQL from other services - which is precisely the layer Eloquent scopes cannot cover. But the correct option's caveats are where seniors earn the point: the policy keys off session state (current_setting('app.tenant_id')), so any code path that forgets to set it - queue workers, scheduled commands, cron, an API integration using a separate connection - will either see zero rows (safe but broken) or, with a permissive policy or unset variable matching nothing/anything, everything (a leak). With connection pooling, session state survives between pooled requests: a SET from tenant A's request can leak into tenant B's unless you reset it (SET LOCAL inside a transaction, or set_config(..., is_local => true)). Two more expert details: by default the table owner bypasses RLS unless you ALTER TABLE ... FORCE ROW LEVEL SECURITY - and in Laravel the app user usually owns the tables (migrations run as it), so without FORCE the policies may never fire for the app at all; and global scopes should stay anyway because they keep behavior predictable at the application layer, work identically on non-Postgres engines, and RLS policies for dozens of tables are themselves a maintenance burden. Never treat the DB layer as a reason to delete the app layer.",
+      "difficulty": "hard",
+      "tags": ["row-level-security", "postgres", "data-isolation", "trap"],
+      "resources": [
+        {
+          "title": "PostgreSQL docs — Row Security Policies",
+          "url": "https://www.postgresql.org/docs/current/ddl-rowsecurity.html",
+          "type": "docs",
+          "summary": "RLS semantics: policies, owner bypass, FORCE ROW LEVEL SECURITY, and session settings."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "Scenario: an established Laravel SaaS has run for eight years with roughly 40 tenants in one shared database scoped by tenant_id columns. Two enterprise tenants now exceed tens of millions of rows each, cause index bloat and lock contention, and one of them has a new EU data-residency requirement that a shared schema cannot satisfy. You are asked to design the migration to a hybrid model where those tenants move to their own databases while small tenants stay pooled. Present the design: how tenant connections get resolved, how you move data with zero or minimal downtime, and the hardest operational problems you would encounter - including migrations, reporting, foreign keys, and queue workers.",
+      "options": [],
+      "correct": [],
+      "explanation": "Model answer. Design: stop treating tenancy as a single flag. Give each Tenant record a storage model/connection target (e.g. database name or a connection name resolved through a tenant-aware connection factory), so resolution logic picks the shared pool connection for most tenants and tenant-specific connections for the migrated ones - exactly the hybrid/elastic-pool pattern. Data movement: for each migrating tenant, provision the empty tenant database, then copy its rows table by table in a reproducible order (respecting foreign keys and identity columns), with checksums/counts verified per table; because the data set is large, use a staging + cutover approach: continuous or near-continuous replication or a final incremental sync, a short read-only maintenance window for the last delta, and a reversible switch (feature flag or per-tenant routing record) so you can roll back to pooled reads instantly. Hardest operational problems, which you should enumerate: (1) per-tenant migrations now matter operationally - every schema change must run against the tenant databases too (php artisan tenants:migrate with the tenant list), plus central migrations for the shared tables; drift between pooled schema and migrated tenants' schema becomes a real risk requiring migration checks. (2) Reporting breaks: the CFO query that joined across tenant tables no longer works because data spans databases - plan a warehouse, dblink/postgres_fdw aggregation, or app-level fan-out, and make sure GDPR deletion flows traverse both stores. (3) Foreign keys that reference central/shared tables (or joined tenant data) must be redesigned - cross-database FK constraints do not exist, so such references move into application code or central reference tables. (4) Jobs and queues must become tenant-aware: a worker that previously ran one central queue now must know which tenant's connection to boot before touching data (or fan out per tenant), and per-tenant cache/Redis namespaces are required. (5) Ops multiply: per-tenant backups/restore drills, monitoring and connection-pool sizing per database, and provisioning automation for new databases. Sequencing: standardize the extraction tooling and pilot on the smallest tenant first; cut over the largest, most sensitive tenant last and keep rollback rehearsed.",
+      "difficulty": "hard",
+      "tags": ["migration", "hybrid-tenancy", "architecture", "design"],
+      "resources": [
+        {
+          "title": "Multi-tenant SaaS database tenancy patterns (Azure Architecture Center)",
+          "url": "https://learn.microsoft.com/en-us/azure/azure-sql/database/saas-tenancy-app-design-patterns",
+          "type": "article",
+          "summary": "Hybrid/elastic models: per-tenant databases alongside a pooled tier."
+        },
+        {
+          "title": "Multi-Tenancy in Laravel: Database-per-Tenant vs. Shared Database (DEV Community)",
+          "url": "https://dev.to/wb_crm/multi-tenancy-in-laravel-database-per-tenant-vs-shared-database-a-practical-guide-3f0j",
+          "type": "article",
+          "summary": "Costs of the shared-to-isolated transition in practice."
+        },
+        {
+          "title": "Tenancy for Laravel v3 — Migrations",
+          "url": "https://tenancyforlaravel.com/docs/v3/migrations",
+          "type": "docs",
+          "summary": "Running schema changes across many tenant databases."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "Scenario: support escalates a suspected data leak. Tenant Alpha's users occasionally see rows from tenant Beta - draft orders that should never be visible - and the reports always coincide with a nightly scheduled job called sendOrderDigests that emails each customer a summary of their orders. Walk through your debugging plan from first signal to root cause, naming the specific mechanisms you would inspect, and then list the permanent safeguards that would have prevented this class of bug.",
+      "options": [],
+      "correct": [],
+      "explanation": "Model answer. Treat it as a security incident: freeze the job, capture evidence, and confirm scope - exactly which Beta rows leaked, to whom, and whether the leak is read-only or writes occurred. Reproduce deterministically with two seeded tenants before theorizing. Then audit by surface, in order of likelihood for a scheduled job: (1) tenant context - the job runs under the scheduler, where no request middleware ever identified a tenant; check whether it is tenant-aware (does it carry/iterate tenant context, or does it assume one?). (2) The scope itself - inspect the actual SQL with the query log or Laravel Telescope (or DB::listen) filtered to this job: if the generated SQL has no tenant predicate, the global scope either no-opped (closure returning early when no tenant is set) or was bypassed with withoutGlobalScope(s)/withoutTenancy(). (3) The cache - digests are prime cache-leak material: if the job caches per-customer summaries under a global key like digest:user:42, tenant A's 3 a.m. run can overwrite and then serve tenant B's data; check key namespaces and whether the cache tenancy bootstrapper was active in the worker. (4) The query path - was the digest built through the Order model or through DB::table/query-builder (unscoped), or does it join a secondary model queried directly? (5) Search indices if any query hits Scout. Permanent safeguards: make tenant scoping fail closed (no tenant context = exception for tenant-owned models) and add an integration test that runs the job with no tenant booted and with tenant A booted, asserting tenant B rows are unreachable; make every data-touching job explicitly tenant-aware (boot tenancy per tenant or carry the tenant id in the job payload, as stancl's QueueTenancyBootstrapper does); namespace all cache keys by tenant; add RLS on Postgres as a database-level backstop for raw queries; and add alerting/monitoring (query-log anomaly detection for unscoped full-table scans, or Telescope tags per tenant) so silent scope loss makes noise instead of quietly shipping another tenant's data.",
+      "difficulty": "hard",
+      "tags": ["debugging", "data-leak", "queues", "security", "design"],
+      "resources": [
+        {
+          "title": "Tenancy for Laravel v3 — Queues",
+          "url": "https://tenancyforlaravel.com/docs/v3/queues",
+          "type": "docs",
+          "summary": "Tenant-aware jobs and central vs tenant queue connections."
+        },
+        {
+          "title": "Tenancy for Laravel v3 — Single-database tenancy",
+          "url": "https://tenancyforlaravel.com/docs/v3/single-database-tenancy",
+          "type": "docs",
+          "summary": "Scoping rules, secondary-model leaks, and unscoped DB calls."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "You run stancl/tenancy v3 with the QueueTenancyBootstrapper registered. A job is dispatched from within tenant Alpha's request context and the database queue driver is configured to store jobs centrally. What happens when the queue worker picks that job up?",
+      "options": [
+        "The job payload carries tenant Alpha's identity, and tenancy is initialized for Alpha in the worker before the job's handle() executes, so the job runs against Alpha's database, cache, and filesystem",
+        "The job runs with whatever tenant context happens to be left over in the long-running worker process, which is why multi-tenant queueing is fundamentally unsafe",
+        "The job is dispatched into Alpha's own database jobs table and consumed only by a worker attached to Alpha's connection",
+        "The package refuses to queue tenant-context jobs on any driver except sync"
+      ],
+      "correct": [0],
+      "explanation": "This is the essence of tenant-aware jobs. Queue workers are long-running processes: they have no HTTP request lifecycle, so nothing re-identifies the tenant when a job runs. stancl/tenancy solves this by making jobs dispatched inside a booted tenant context carry the tenant's identity in the serialized payload; the QueueTenancyBootstrapper intercepts handling and initializes tenancy for that tenant before handle() runs - so the job correctly sees the tenant's database, cache, and filesystem - and tears tenancy down afterwards. The docs are explicit that tenant jobs are stored centrally (the database driver's jobs table must point at the central connection, e.g. 'connection' => 'central' in queue.connections.database; the Redis connection must not be in tenancy.redis.prefixed_connections), precisely so jobs do not get stranded in tenant databases. Two further expert points: don't mix central and tenant jobs on one queue connection, because leftover bootstrapped state can make a central job believe it is inside the previous tenant's context; and jobs that must always run centrally should use a dedicated queue connection marked 'central' => true. Option 0 is the documented behavior; the others misdescribe where jobs live and what the worker knows.",
+      "difficulty": "hard",
+      "tags": ["stancl-tenancy", "queues", "tenant-aware-jobs"],
+      "resources": [
+        {
+          "title": "Tenancy for Laravel v3 — Queues",
+          "url": "https://tenancyforlaravel.com/docs/v3/queues",
+          "type": "docs",
+          "summary": "QueueTenancyBootstrapper, central job storage, and queue connection guidance."
+        },
+        {
+          "title": "Laravel docs — Queues",
+          "url": "https://laravel.com/docs/11.x/queues",
+          "type": "docs",
+          "summary": "How queue workers handle serialized jobs."
+        }
+      ]
+    },
+    {
+      "type": "multi",
+      "prompt": "Which of the following statements about enforcing tenant isolation in a shared-database Laravel application are TRUE? Select all that apply.",
+      "options": [
+        "Global scopes constrain Eloquent queries built through the model (including model-based updates and deletes), but code paths that construct queries directly - DB::table('orders') or a fresh query builder - are not scoped",
+        "A global scope that returns early when no tenant is set (for example in a queue worker or console command) silently removes isolation for that model everywhere the tenant is missing",
+        "In a shared table, uniqueness that should be per-tenant (like a slug) must be enforced with a composite unique index such as unique(['tenant_id', 'slug']), because a plain unique index on slug lets one tenant's slug block all other tenants",
+        "The validation rule Rule::unique('posts', 'slug') is automatically restricted to the current tenant because the same global scope runs for validation queries",
+        "Once a tenant_id column is indexed, queue workers and scheduled commands are automatically isolated because indexing is a database-level enforcement",
+        "Laravel's query builder automatically applies registered global scopes even when you start from DB::table()"
+      ],
+      "correct": [0, 1, 2],
+      "explanation": "The true statements map to the three layers where shared-database tenancy fails silently. (0) Global scopes ride on the Eloquent builder; the query builder and DB facade have no model, hence no scopes - stancl's docs say low-level database queries are never scoped. (1) A scope that no-ops without a tenant converts a should-be-hard guarantee into a soft one; isolation must fail closed. (2) Uniqueness is enforced at the database, not by scopes: a plain unique index on slug is global, so tenant A registering the slug 'dashboard' makes it unavailable to every other tenant - and worse, silently - so the index itself must be composite (tenant_id, slug). The false statements are the mirror-image myths: Rule::unique validates against the table directly through the validator, which never applies model global scopes - you must add ->where('tenant_id', tenant('id')) or use a helper such as stancl's HasScopedValidationRules trait; an index enforces constraints, not row visibility, so it does nothing for queue workers; and the query builder has no access to model scopes at all. Candidates who recite the three true statements and can explain each false one demonstrate they understand where application-level enforcement ends and database-level enforcement must begin.",
+      "difficulty": "hard",
+      "tags": ["global-scopes", "data-isolation", "validation", "uniqueness"],
+      "resources": [
+        {
+          "title": "Tenancy for Laravel v3 — Single-database tenancy",
+          "url": "https://tenancyforlaravel.com/docs/v3/single-database-tenancy",
+          "type": "docs",
+          "summary": "Tenant-scoped unique indexes and scoped validation rules."
+        },
+        {
+          "title": "Laravel docs — Eloquent: Global Scopes",
+          "url": "https://laravel.com/docs/11.x/eloquent#global-scopes",
+          "type": "docs",
+          "summary": "What global scopes constrain and how to remove them."
+        }
+      ]
+    }
+  ]
+}

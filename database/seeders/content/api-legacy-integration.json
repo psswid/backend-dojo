@@ -1,0 +1,386 @@
+{
+  "topic": {
+    "slug": "api-legacy-integration",
+    "name": "API Design & Legacy Integration",
+    "description": "Designing versioned REST APIs and integrating legacy (SOAP/XML, legacy REST) systems in a modern Laravel/Symfony application.",
+    "color": "#6366f1",
+    "icon": "🔌",
+    "sort_order": 1
+  },
+  "resources": [
+    {
+      "title": "Laravel — Rate Limiting (RateLimiter::for, throttle middleware)",
+      "url": "https://laravel.com/docs/11.x/rate-limiting",
+      "type": "docs",
+      "summary": "Official Laravel docs: defining named limiters with RateLimiter::for, attaching them via the throttle:api middleware, per-user/IP keys and the 429 response behavior."
+    },
+    {
+      "title": "Laravel — Eloquent API Resources",
+      "url": "https://laravel.com/docs/11.x/eloquent-resources",
+      "type": "docs",
+      "summary": "Official docs for JsonResource: toArray($request), whenLoaded, conditional fields, collections and pagination metadata."
+    },
+    {
+      "title": "Laravel — Sanctum",
+      "url": "https://laravel.com/docs/11.x/sanctum",
+      "type": "docs",
+      "summary": "Official Sanctum docs: personal access tokens (hashed in the DB, revocable) and SPA cookie authentication for first-party clients."
+    },
+    {
+      "title": "Stripe API Reference — Versioning",
+      "url": "https://docs.stripe.com/api/versioning",
+      "type": "docs",
+      "summary": "Stripe's approach to API versioning and deprecation policy: date-based versions, additive backward-compatible changes, and long sunset timelines."
+    },
+    {
+      "title": "Martin Fowler — AntiCorruptionLayer",
+      "url": "https://martinfowler.com/bliki/AntiCorruptionLayer.html",
+      "type": "article",
+      "summary": "The canonical description of the anti-corruption layer: a translating boundary that keeps a legacy subsystem's model from leaking into a new domain."
+    },
+    {
+      "title": "RFC 7807 / 9457 — Problem Details for HTTP APIs",
+      "url": "https://www.rfc-editor.org/rfc/rfc7807",
+      "type": "spec",
+      "summary": "The standardized application/problem+json error envelope (type, title, status, detail), now RFC 9457; adopted by Symfony's problem normalizer and API Platform."
+    },
+    {
+      "title": "Symfony — Serializer",
+      "url": "https://symfony.com/doc/current/serializer.html",
+      "type": "docs",
+      "summary": "Official Symfony Serializer docs: normalization/denormalization, serialization groups with #[Groups] and context configuration."
+    },
+    {
+      "title": "Pact — Consumer-Driven Contract Testing",
+      "url": "https://docs.pact.io/",
+      "type": "docs",
+      "summary": "Pact documentation: consumers publish their real expectations, providers verify them in CI to catch breaking changes before release."
+    }
+  ],
+  "questions": [
+    {
+      "type": "single",
+      "prompt": "You are adding v2 of a public REST API and must choose how clients request a version. Your main goals are that the version is visible in logs and bookmarks, works with plain HTTP caching and every HTTP client without special configuration, and fails loudly when a client omits it. Which mechanism fits those goals best?",
+      "options": [
+        "Put the version in the URI path, e.g. GET /api/v2/users",
+        "Send it in a custom request header, e.g. X-API-Version: 2",
+        "Send it as a query parameter, e.g. GET /api/users?api_version=2",
+        "Negotiate it through the Accept header, e.g. Accept: application/vnd.myapp.v2+json"
+      ],
+      "correct": [0],
+      "explanation": "URI path versioning (option A) makes the version part of the resource identifier: it shows up in access logs, bookmarks, monitoring and support tickets; each version is a distinct URL so CDNs and reverse proxies cache it correctly with zero Vary configuration; and because /api/v1/users and /api/v2/users are different URLs, a client that forgets to specify a version simply gets the old endpoint or a 404 — a loud failure. Header versioning (B) hides the version from the URL: if a client omits X-API-Version you must silently default it (the exact silent breakage you want to avoid), and caching layers must be configured with Vary: X-API-Version or responses from both versions get mixed in one cache entry. Query-parameter versioning (C) has the same silent-default problem and pollutes the identity of one canonical resource with a presentation concern, weakening cache keys and shared URLs. Media-type versioning via Accept (D) is the most RFC-faithful form of content negotiation and keeps URLs clean, but it depends on every gateway, client library and proxy honoring and parsing vendor media types; debugging 'why did I get v1?' becomes much harder. In practice most public APIs (Stripe, GitHub) put the major version in the URI and treat headers/query strings only as an additional, optional signal — Laravel and Symfony have no first-class versioning, so teams implement it with route prefixes (Route::prefix('v1') / #[Route('/api/v1/...')]) dispatching different controllers, which also lets old and new versions run side by side during a migration.",
+      "difficulty": "easy",
+      "tags": ["versioning", "rest", "api-design"],
+      "resources": [
+        {
+          "title": "Stripe API Reference — Versioning",
+          "url": "https://docs.stripe.com/api/versioning",
+          "type": "docs",
+          "summary": "How a mature API vendor handles versions, additive changes and deprecation."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "You are building a Laravel JSON API and want a clean layer that decides exactly which model attributes and relationships are exposed, plus custom computed fields, without sprinkling ->only() and ->toArray() logic through controllers. What is the idiomatic Laravel building block for this?",
+      "options": [
+        "Extend Illuminate\\Http\\Resources\\Json\\JsonResource and return the representation from its toArray($request) method",
+        "Extend Illuminate\\Foundation\\Http\\FormRequest and define validation rules()",
+        "Create a PHP trait that adds toArray() to every model",
+        "Configure a global middleware that strips attributes based on the current route"
+      ],
+      "correct": [0],
+      "explanation": "Laravel API Resources (JsonResource, generated with php artisan make:resource UserResource) are the idiomatic transformation layer: toArray($request) returns exactly the array that becomes the JSON response, so one model can be rendered differently per endpoint (a UserResource for public profiles vs an AdminUserResource that also exposes email and roles). Resources support conditional inclusion with whenLoaded('orders') or mergeWhen(...), so relationships are only serialized if they were actually eager-loaded, and returning a paginator from a resource-backed controller preserves Laravel's pagination meta (total, current_page, links...). Option B is wrong: FormRequest is the inbound layer — it validates and authorizes the request before your controller runs; it has nothing to do with the outbound representation. Option C couples your persistence model to one wire format and breaks the moment two endpoints need different shapes, which is precisely the problem resources solve. Option D hides representation logic in magical middleware that guesses intent from the route, making the response contract implicit and hard to test. The Symfony equivalent of 'one entity, several representations' is the Serializer with serialization groups and per-endpoint normalization context, but in Laravel the resource class is the standard answer.",
+      "difficulty": "easy",
+      "tags": ["serialization", "laravel", "api-resources"],
+      "resources": [
+        {
+          "title": "Laravel — Eloquent API Resources",
+          "url": "https://laravel.com/docs/11.x/eloquent-resources",
+          "type": "docs",
+          "summary": "Official docs for JsonResource, whenLoaded, conditional attributes and collections."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "In Laravel you paginate an API query with ->paginate(25) and return it from a controller. Which statement about the resulting JSON metadata is true?",
+      "options": [
+        "The JSON includes total, current_page and last_page, because paginate() returns a LengthAwarePaginator that already knows the total count",
+        "It contains no totals because Laravel only returns the requested page — you must run a separate count query yourself",
+        "Laravel returns cursor-encoded pagination by default, so the JSON exposes next_cursor but never a total",
+        "Pagination metadata is only added if you explicitly call ->withQueryString()"
+      ],
+      "correct": [0],
+      "explanation": "paginate($perPage) transparently runs a count query and returns a LengthAwarePaginator, whose default JSON serialization includes data, links and a meta block with current_page, last_page, per_page, total and more — this is what page-number UIs need. Option B is wrong because the count is already executed for you; option C confuses cursorPaginate(), which is keyset-based and deliberately omits total/last_page; option D confuses withQueryString(), which only controls whether pagination links preserve the current query string. For API design the interesting part is the trade-off between the paginators: simplePaginate() skips the total count (cheaper on huge tables, no last_page) and is enough for 'next/prev' flows; cursorPaginate() encodes a keyset cursor into the links, so pages stay stable when new rows are inserted between requests and the database never pays for OFFSET scans over millions of rows — the right default for infinite scroll over large tables. A senior answer also mentions that offset pagination degrades with page depth and can skip or duplicate rows when the underlying data mutates concurrently, while keyset pagination needs a stable, unique sort order (see also the Symfony ecosystem: Doctrine paginators such as KnpPaginatorBundle or Pagerfanta play the role of Laravel's paginators there).",
+      "difficulty": "easy",
+      "tags": ["pagination", "laravel", "api-design"],
+      "resources": [
+        {
+          "title": "Laravel — Pagination",
+          "url": "https://laravel.com/docs/11.x/pagination",
+          "type": "docs",
+          "summary": "LengthAware, Simple and Cursor paginators and their serialized output."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "You are exposing a Laravel API to external third-party applications that need to obtain tokens through OAuth2 flows (client credentials, authorization code) with proper scopes and refresh tokens. Laravel ships two token packages. Which one should you reach for?",
+      "options": [
+        "Laravel Passport, because it is a full OAuth2 server implementation built on league/oauth2-server",
+        "Laravel Sanctum, because it can issue personal access tokens to anyone",
+        "Laravel Fortify, because it implements OAuth2 for SPA login",
+        "Laravel Breeze, because it scaffolds API token endpoints"
+      ],
+      "correct": [0],
+      "explanation": "Laravel Passport is a complete OAuth2 server (wrapping league/oauth2-server): it supports client credentials, authorization code (with PKCE in modern versions), refresh-token grant, per-client scopes and server-side revocation — exactly what a third-party integration portal needs, and it can even act as an auth server for its own first-party SPA via password/client grants. Option B is wrong: Sanctum is deliberately simpler — it issues personal access tokens (long random strings stored hashed in the personal_access_tokens table) plus cookie-based SPA session auth, and its 'abilities' are simple string checks, not an OAuth2 scope/refresh lifecycle; it is the right tool for first-party mobile apps and SPAs where a full OAuth dance is overkill, and its DB-backed tokens are instantly revocable. Option C is wrong: Fortify is Laravel's authentication scaffolding (login, registration, two-factor) and implements no OAuth2 at all. Option D is wrong: Breeze is a starter kit for login/registration UI, not a token API. A senior interviewer will also push on the stateless-vs-revocable axis here: JWT-based packages (e.g. tymon/jwt-auth or php-open-source-saver/jwt-auth) give stateless tokens that need no DB lookup per request but cannot be revoked before expiry, whereas both Passport and Sanctum keep server-side records you can delete to kill a token instantly.",
+      "difficulty": "easy",
+      "tags": ["auth", "oauth2", "laravel", "sanctum", "passport"],
+      "resources": [
+        {
+          "title": "Laravel — Passport",
+          "url": "https://laravel.com/docs/11.x/passport",
+          "type": "docs",
+          "summary": "OAuth2 server implementation: grants, scopes and token revocation."
+        },
+        {
+          "title": "Laravel — Sanctum",
+          "url": "https://laravel.com/docs/11.x/sanctum",
+          "type": "docs",
+          "summary": "Personal access tokens and SPA authentication for first-party clients."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "A Laravel 11 API defines a named limiter with RateLimiter::for('api', fn (Request $request) => Limit::perMinute(60)->by($request->user()?->id ?: $request->ip())); and attaches it to the route group with ->middleware('throttle:api'). An unauthenticated client (so the key falls back to the IP) exceeds the 60 requests/minute budget. What exactly does Laravel return for the next request?",
+      "options": [
+        "HTTP 403 Forbidden",
+        "HTTP 429 Too Many Requests with a Retry-After header indicating the seconds until the limit resets",
+        "HTTP 503 Service Unavailable",
+        "HTTP 200 with an empty body, silently dropping the request"
+      ],
+      "correct": [1],
+      "explanation": "Laravel's throttle:api middleware resolves the named limiter registered in RateLimiter::for and, once the budget is exhausted, responds with 429 Too Many Requests together with a Retry-After header (in seconds, since Limit::perMinute makes the retry time knowable) and, when enabled, X-RateLimit-Limit / X-RateLimit-Remaining headers; the 429 semantics for 'too many requests' are standardized in RFC 6585. Option A is wrong: 403 is an authorization response — the client may be perfectly allowed to use the API, it is just consuming too fast; conflating throttling with permission errors breaks client logic. Option C is wrong: 503 signals the server cannot handle load right now, not that the client over-used its quota (that would also encourage clients to retry harder). Option D describes behavior that does not exist — dropping requests silently would make debugging and backoff impossible. Implementation details worth mentioning: the counters live in the cache store (use the redis cache driver in production so the increments are atomic and shared across workers), the limiter key in the example falls back to $request->ip(), which is why behind a load balancer you must configure Laravel's TrustProxies, otherwise every user shares the proxy's IP and you either throttle everyone at once or trust a spoofable X-Forwarded-For; per-authenticated-user keys (by($user->id)) are the robust default for APIs. Symfony's equivalent is the Rate Limiter component (symfony/rate-limiter) attached via the #[AsRateLimiter] attribute or security configuration, which also returns 429 with a Retry-After when the limiter rejects a request.",
+      "difficulty": "medium",
+      "tags": ["rate-limiting", "laravel", "throttle", "http"],
+      "resources": [
+        {
+          "title": "Laravel — Rate Limiting",
+          "url": "https://laravel.com/docs/11.x/rate-limiting",
+          "type": "docs",
+          "summary": "Named limiters via RateLimiter::for and the throttle middleware behavior."
+        }
+      ]
+    },
+    {
+      "type": "multi",
+      "prompt": "Your public Laravel/Symfony API returns JSON for errors. A reviewer proposes standardizing the error body across all 4xx and 5xx responses so clients and your support team can handle failures programmatically. Which of the following belong to a sound, consistent error-envelope design? (Select all that apply.)",
+      "options": [
+        "A stable, machine-readable error code (e.g. VALIDATION_FAILED, RATE_LIMITED) alongside a human-readable message in every error body",
+        "A request/correlation identifier that the client can echo back in support tickets so you can trace the failing request in logs",
+        "Following RFC 7807 / RFC 9457 (application/problem+json) with type, title, status and detail fields",
+        "Embedding the full server-side stack trace and exception class in the response so external clients can debug your code"
+      ],
+      "correct": [0, 1, 2],
+      "explanation": "A good error envelope has three jobs: let code branch reliably, let humans understand, and let support trace. Option A is right: a stable machine-readable code means clients can switch on 'RATE_LIMITED' without string-matching localized messages, while the message stays readable for developers and end users. Option B is right: echoing a request id (for example a X-Request-Id header generated by middleware and included in the error body) turns a vague bug report into a grep-able log line — Laravel has no built-in request-id header, so you add a small middleware and log the id with every entry. Option C is right: RFC 7807 (now RFC 9457) standardizes application/problem+json with type, title, status, detail (and optional extensions), and Symfony embraces it directly — HttpKernel's ProblemDetailsFactory / problem normalizer produce it for exceptions, and API Platform returns it by default, so adopting it costs almost nothing in Symfony. Option D is the anti-pattern: stack traces and internal exception class names leak file paths, class structure and framework internals to anyone probing your API — a security and information-disclosure problem, and debug-only output breaks the very contract you are trying to establish. In Laravel you shape this in the exception handler: render() (or the withExceptions() callback in bootstrap/app.php since Laravel 11) maps exceptions to your envelope, e.g. validation failures keep Laravel's nested errors object for field-level 422 details, custom domain exceptions map to stable codes, and in production the generic handler returns a clean 500 body with the request id instead of a trace.",
+      "difficulty": "medium",
+      "tags": ["error-handling", "api-design", "rfc7807"],
+      "resources": [
+        {
+          "title": "RFC 7807 — Problem Details for HTTP APIs",
+          "url": "https://www.rfc-editor.org/rfc/rfc7807",
+          "type": "spec",
+          "summary": "The standardized problem+json envelope used by Symfony/API Platform."
+        },
+        {
+          "title": "Laravel — Error Handling",
+          "url": "https://laravel.com/docs/11.x/errors",
+          "type": "docs",
+          "summary": "Customizing exception rendering and JSON error responses."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "Your API exposes POST /api/v1/payments to charge a card. One night a partner's client times out waiting for the response, but the charge actually succeeded. The client retries the same POST and the customer is charged twice. Which mechanism is the standard, robust fix?",
+      "options": [
+        "Require clients to send an Idempotency-Key header; on a duplicate key the server replays the stored original response instead of executing the operation again",
+        "Change the endpoint to GET /api/v1/payments so that retries are naturally safe",
+        "Tell clients to generate a fresh UUID for every attempt so each retry is treated as a brand-new operation",
+        "Add a confirm step where the client must first GET the payment status and only retry when the payment was not found"
+      ],
+      "correct": [0],
+      "explanation": "The scenario is the classic 'ambiguous outcome': the request may or may not have been applied, so a blind retry can double-apply. The standard fix (option A, the pattern Stripe made famous) is an idempotency key: the client sends a value that uniquely identifies the logical operation (one key per new payment intent), and the server persists the key together with the result — typically a unique database constraint on a column like (merchant_id, idempotency_key) or a Redis entry with a TTL — so a retried key short-circuits to the stored response and the operation runs at most once. Note the key must be created by the client BEFORE the first attempt and reused on retries. Option B is wrong twice: GET is defined as a safe, non-mutating method — a payment endpoint that charges a card must not be a GET (and retrofitting one changes semantics, not guarantees). Option C is the trap: a fresh UUID per attempt tells the server these are distinct operations, so the retry creates a second charge — exactly the bug you are fixing. Option D is a fragile two-phase workaround: a status check between the timeout and the retry still races with an in-flight original request, and it pushes correctness onto every consumer instead of guaranteeing it server-side. Useful distinctions for the interview: 'safe' (no side effects: GET/HEAD/OPTIONS) versus 'idempotent' (repeating produces the same end state: PUT replacing a resource, DELETE deleting an already-missing resource); POST is neither, which is why mutating creations/charges get explicit idempotency support. In Laravel you typically implement it as middleware or a service method that consults the idempotency store before executing; in Symfony, an event subscriber on kernel.request/kernel.response does the same.",
+      "difficulty": "medium",
+      "tags": ["idempotency", "http", "api-design", "payments"],
+      "resources": [
+        {
+          "title": "Stripe API Reference — Idempotent Requests",
+          "url": "https://docs.stripe.com/api/idempotent_requests",
+          "type": "docs",
+          "summary": "The canonical Idempotency-Key pattern for safely retrying mutating requests."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "You are designing the public API of a new Laravel 11 application and a senior architect proposes full HATEOAS: every resource response carries typed hyperlinks, and clients are expected to discover and navigate state transitions by following those links instead of hard-coding URLs. (a) What genuine benefits does HATEOAS provide? (b) What are the concrete costs and drawbacks when your consumers are third-party mobile and backend clients? (c) Would you adopt it as the default for this API, and under what conditions?",
+      "options": [],
+      "correct": [],
+      "explanation": "Model answer. (a) Benefits: HATEOAS (Hypermedia As The Engine Of Application State, the third level of the Richardson Maturity Model) makes the server the source of truth about what a client may do next. Each resource carries links — self, next, and state-dependent actions such as cancel or pay — so a link's presence encodes legal transitions: an already-paid order simply has no 'pay' link, preventing clients from calling invalid actions. Because clients discover URLs rather than hard-coding them, the server can move resources and add affordances without a coordinated client release, which genuinely improves long-term evolvability; the API also becomes self-describing and reduces the amount of out-of-band endpoint documentation clients must encode. (b) Costs: payloads grow and every client becomes a small hypermedia engine that must parse links and implement traversal, which is more code and more failure modes than calling a documented URL. Client code generation from OpenAPI — how most third-party teams consume an API — assumes fixed endpoints, so full HATEOAS fights the dominant tooling. Versioning does not disappear: link semantics (what does next mean, which transitions exist in v1) still need contracts, and clients must validate that server-returned URLs are what they expect. Debugging and testing are harder because behavior is spread across responses rather than an explicit endpoint list, and a naive implementation can even introduce SSRF/open-redirect-style issues if clients blindly follow returned URLs. (c) Recommendation: treat HATEOAS as a spectrum, not a binary. Pragmatic middle ground — the choice of most successful public APIs (Stripe, GitHub): include stable self and pagination links, and add state-dependent action links only where they genuinely encode a workflow (for example an order resource exposing only currently-legal transitions), while still documenting fixed endpoints in OpenAPI. Reserve full link-driven HATEOAS for closed systems with a handful of long-lived clients, server-driven UIs, or state-machine-heavy domains (IoT, fulfillment) where the cost of link traversal is repaid by decoupling. In Laravel there is no first-class hypermedia layer, so links are typically assembled in API Resources or a small link-builder service (or by adopting JSON:API/HAL conventions); in Symfony you would add a custom normalizer to inject links during serialization.",
+      "difficulty": "medium",
+      "tags": ["hateoas", "rest", "api-design"],
+      "resources": [
+        {
+          "title": "Martin Fowler — Richardson Maturity Model",
+          "url": "https://martinfowler.com/articles/richardsonMaturityModel.html",
+          "type": "article",
+          "summary": "Where HATEOAS (level 3) sits on the road to REST and what it really buys you."
+        },
+        {
+          "title": "JSON:API — Links",
+          "url": "https://jsonapi.org/",
+          "type": "spec",
+          "summary": "A concrete, widely used hypermedia-in-JSON convention (links, relationships, pagination)."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "In a Symfony app, one entity (User) is exposed through two JSON endpoints: a public profile endpoint that should return only name and avatarUrl, and an admin endpoint that also returns email, roles and internal notes. You want one serializer pipeline and no duplicated DTO mapping logic. Which Symfony mechanism is the idiomatic way to vary which fields get serialized per endpoint?",
+      "options": [
+        "Serialization groups: annotate properties with #[Groups('public')] and #[Groups('admin')], then serialize with the groups context, e.g. serialize($user, 'json', ['groups' => ['admin']]) in each controller",
+        "Put both field sets on the entity and use a JSONP callback registered on the route to filter fields",
+        "Serialize the raw object with PHP's serialize() and manually strip keys in a controller per endpoint",
+        "Register two separate Serializer service instances via compiler passes, one per endpoint"
+      ],
+      "correct": [0],
+      "explanation": "Symfony Serializer groups (option A) are the idiomatic mechanism: you annotate properties or methods with #[Groups] (Symfony\\Component\\Serializer\\Annotation\\Groups) and pass the desired groups through the serializer context — serialize($user, 'json', ['groups' => ['public']]) or denormalize with the same context; only members in at least one requested group are normalized. Each endpoint chooses its own group set, so one entity, one normalizer pipeline, zero duplication — and with API Platform you configure the same idea per operation via normalization_context. Option B is wrong: JSONP is a cross-domain script-loading technique (and a security smell), not a field-filtering mechanism. Option C is wrong twice: PHP's serialize() produces PHP's internal format, not JSON, and never for a public API; and manually stripping keys in controllers reinvents group logic badly and frailly. Option D is wrong: two Serializer instances duplicate all normalizer/encoder wiring for no benefit — the groups context already varies the output on one instance. Worth adding in the interview: groups compose (a property can carry several), they work symmetrically for denormalization (important for legacy payloads you must import), and a custom Normalizer or the Context attribute can inject request-driven context. The Laravel analog of 'one entity, several JSON views' is separate API Resource classes or conditionals inside toArray($request).",
+      "difficulty": "medium",
+      "tags": ["serialization", "symfony", "api"],
+      "resources": [
+        {
+          "title": "Symfony — Serializer (Serialization Groups)",
+          "url": "https://symfony.com/doc/current/serializer.html",
+          "type": "docs",
+          "summary": "Serialization groups, #[Groups] attributes and context-based normalization."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "A teammate proposes replacing Laravel Sanctum's DB-backed tokens with stateless JWTs for your API authentication, arguing: 'JWT is faster because there is no database lookup per request, and it scales trivially across servers — Sanctum is obsolete.' Which of the following is the strongest and most accurate technical objection to that claim?",
+      "options": [
+        "JWTs cannot be revoked before their exp claim, so a leaked token, a fired employee or a banned user keeps working until expiry — while DB-backed tokens (Sanctum/Passport) can be revoked instantly by deleting or flagging the token row",
+        "JWT is actually slower because the HS256 HMAC must be recomputed on every single request",
+        "The API server cannot read a JWT, so it can never know which user is calling",
+        "JWTs only work over HTTPS while Sanctum tokens can also be used over plain HTTP"
+      ],
+      "correct": [0],
+      "explanation": "The core trade-off is statelessness vs revocability, and option A names it precisely. A signature-valid JWT is trusted until its exp claim regardless of what happens in your database: revoking a leaked token, a departed employee's access or an abusive account before expiry requires workarounds — a short exp plus a revocable refresh token, or a denylist/blacklist of jti values in Redis or the DB, which silently reintroduces exactly the per-request store lookup the 'stateless' pitch promised to remove (and a blacklist only covers tokens you know about). Sanctum stores each token hashed in personal_access_tokens and revocation is a row delete that takes effect on the very next request; Passport keeps revocable OAuth tokens server-side. Option B is wrong: verifying an HMAC signature costs microseconds and, given an indexed lookup, is not meaningfully slower than a DB read — and many real JWT setups pay a store round-trip anyway for revocation or refresh, erasing the claimed advantage. Option C is wrong: the server holding the shared secret verifies the signature and reads the claims (sub, exp, scopes) directly — that is the entire point. Option D is wrong and dangerously misleading: both token kinds are bearer secrets and must travel over TLS; sending either over plain HTTP leaks it to any observer. If the interviewer keeps pushing, add the JWT-specific sharp edges: algorithm-confusion attacks (attacker rewrites the alg header to none or HS256 when the server expects RS256), secret management and rotation, clock-skew handling for exp/nbf, and larger per-request payloads vs a compact opaque token — then land on the real design question: choose stateless only where instant revocation is not a requirement, and otherwise keep short-lived tokens plus a revocable refresh mechanism.",
+      "difficulty": "hard",
+      "tags": ["auth", "jwt", "sanctum", "security"],
+      "resources": [
+        {
+          "title": "RFC 7519 — JSON Web Token (JWT)",
+          "url": "https://www.rfc-editor.org/rfc/rfc7519",
+          "type": "spec",
+          "summary": "The JWT specification: claims, signatures and expiry semantics."
+        },
+        {
+          "title": "Laravel — Sanctum",
+          "url": "https://laravel.com/docs/11.x/sanctum",
+          "type": "docs",
+          "summary": "Hashed, revocable personal access tokens — the contrast to stateless JWTs."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "A legacy ERP still in production exposes a SOAP 1.1 web service: a large WSDL, XML payloads with occasional schema quirks, no test environment, and responses that take 2 to 10 seconds. You must integrate it into a modern Laravel (or Symfony) application's checkout flow. Describe concretely how you would structure this integration so the legacy system stays replaceable, your code stays testable, and checkout never hangs or double-charges. Cover: transport choice, the boundary pattern(s) you would use, data mapping, timeouts/retries/idempotency, and how you test your code without the legacy service.",
+      "options": [],
+      "correct": [],
+      "explanation": "Model answer. Boundary first: define a domain port — an interface written in your domain's language, e.g. OrderGateway::placeOrder(PlaceOrderRequest): PlaceOrderResult — and implement it with a single adapter, SoapLegacyOrderGateway, that owns all SOAP/XML knowledge. This Adapter pattern (the client side of an anti-corruption layer) means no controller, service or domain class ever sees SoapClient, \\SoapFault or an XML element; when the ERP is eventually replaced by a REST system you write one new adapter and rebind it in the container (Laravel: bind the interface in a service provider; Symfony: service alias/autowiring on the interface) and the rest of the application does not change. Transport: the pragmatic baseline is PHP's built-in SoapClient from ext-soap pointed at the WSDL with sensible options (connection_timeout, and PHP's default_socket_timeout for reads; cache_wsdl => WSDL_CACHE_NONE while developing, WSDL_CACHE_BOTH in production), calling __soapCall($operation, $args) and reading the typed members off the result; if the WSDL is large and the schema quirky, a typed SOAP client library (for Symfony, the phpro/soap-client ecosystem; for plain PHP, code generation from the WSDL) removes a lot of stringly XML pain. Remember ext-soap has no built-in WS-Security, so token/username headers are attached via __setSoapHeaders(new SoapHeader(...)). Mapping lives in the adapter: deserialize the SOAP response into the port's result type, translating enums (legacy status codes to domain enums), identifiers and dates; legacy schema concepts must never leak past the boundary. Robustness: 2–10 second responses mean checkout should not call the ERP synchronously in the web request at all — enqueue the operation (Laravel queue worker / Symfony Messenger async transport) and model checkout as a state machine updated by a webhook or a reconciliation worker. For any synchronous call keep tight timeouts, catch SoapFault and map it to domain exceptions (ErpUnavailable, OrderRejected), and add a circuit breaker (a simple Redis failure counter that fails fast after N consecutive errors) so a dead ERP does not hang every checkout. Idempotency/double-charge: legacy SOAP endpoints are usually not idempotent, so you enforce at-most-once on your side — store a unique, client-generated order reference (your UUID) in the ERP payload field the vendor supports, persist it with a unique DB constraint, and before retrying after an ambiguous timeout run a status/reconciliation query instead of blindly re-sending the order. Testing without the service: because the domain only sees the interface, unit-test all business logic against an in-memory/fake OrderGateway; test the real adapter against recorded fixtures — capture actual request/response XML (or use VCR/WireMock-style replay) into golden files and assert mapping in both directions in CI; validate payloads against the XSD where the schema permits; and if there is truly no test environment, run a shadow period logging real traffic to build fixtures. The interviewer will reward hearing the three words: adapter/ACL seam, async + state machine, and idempotency via your own unique reference.",
+      "difficulty": "hard",
+      "tags": ["legacy", "soap", "acl", "integration", "testing"],
+      "resources": [
+        {
+          "title": "PHP Manual — SoapClient",
+          "url": "https://www.php.net/manual/en/class.soapclient.php",
+          "type": "docs",
+          "summary": "The built-in ext-soap client: options, __soapCall and SoapHeader handling."
+        },
+        {
+          "title": "Martin Fowler — AntiCorruptionLayer",
+          "url": "https://martinfowler.com/bliki/AntiCorruptionLayer.html",
+          "type": "article",
+          "summary": "The boundary pattern that keeps legacy models from leaking into your domain."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "Your company's public API still has a legacy v1 endpoint (GET /v1/reports/export?format=csv) that 30 partners call every day. You must remove it because it reads from a database being decommissioned, and you want a defensible, low-drama deprecation process. Walk through the end-to-end plan: the signals/headers you would introduce, the timeline and policy, how you identify and migrate consumers, the rollout and cutover mechanics, and what you do at the end — including partners who never migrate.",
+      "options": [],
+      "correct": [],
+      "explanation": "Model answer. Policy first: publish a deprecation policy before you need it, then follow it mechanically — typical public-API practice (Stripe-style) is a minimum of 6–12 months of warnings after the replacement ships, with removals tied to major versions or explicit sunset dates; the rule must be written down so business pressure cannot silently break partners. Signals: while v1 still works, mark it — emit the Deprecation and Sunset response headers (per the IETF 'Deprecation and Sunset' HTTP draft) on every legacy response, add a Link header or docs URL pointing at the v2 equivalent, log every call per partner (identify consumers by API key/tenant, User-Agent or app name) so you can build a usage dashboard: who calls it, how often, with which parameters. Communication and migration: announce on a public changelog and by email with a concrete sunset date; ship a v2 replacement plus a migration guide and SDK/sample code; internally dual-run where possible so you can compare v2 output with v1 semantics before asking partners to move; offer migration support to the biggest callers; and for stragglers use staged enforcement — planned 'brownouts', short windows where the legacy endpoint deliberately returns 503/429 during off-peak hours, a tactic Atlassian and Stripe have used to force attention without a hard break. Cutover: at the sunset date return 410 Gone (not 404 — 410 explicitly tells the client the resource existed and is intentionally gone) with a body pointing to the v2 docs, keep the route alive purely to log and redirect stragglers, then remove code and monitoring for it once traffic is truly zero; keep a config flag (legacy.enabled) so the kill switch is a config change, not a deploy. Hard cases: a partner who is contractually or technically stuck — that becomes a business decision with a documented exception and an explicit extension, never an unbounded silent extension; and internal consumers migrate first so your own dogfooding is clean. Engineering mechanics to mention: in Laravel, put the deprecated route group behind middleware that adds the Deprecation/Sunset headers and emits metrics; in Symfony the same via route attributes and an event listener; and ensure the deprecated endpoint is visibly flagged in your OpenAPI spec so new consumers never adopt it.",
+      "difficulty": "hard",
+      "tags": ["deprecation", "versioning", "legacy", "api-design"],
+      "resources": [
+        {
+          "title": "IETF Draft — Deprecation and Sunset HTTP Headers",
+          "url": "https://datatracker.ietf.org/doc/html/draft-ietf-httpapi-deprecation-header",
+          "type": "spec",
+          "summary": "The proposed Deprecation and Sunset response headers for signaling API retirement."
+        },
+        {
+          "title": "Stripe API Reference — Versioning",
+          "url": "https://docs.stripe.com/api/versioning",
+          "type": "docs",
+          "summary": "A real-world, published deprecation and sunset policy."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "Your Laravel API is replacing a legacy SOAP endpoint, and several partners will consume it. Your team proposes consumer-driven contract testing with Pact in CI: each partner publishes the expectations it actually holds, and your provider pipeline verifies the API against them. Which statement best captures the distinguishing value of this approach compared with ordinary integration/E2E tests against a staging environment?",
+      "options": [
+        "It catches breaking changes at provider build time against the real, current expectations of each consumer — even consumers whose code has never been deployed or run in your staging environment",
+        "It replaces the need for unit tests, because consumer expectations fully cover the provider's business logic",
+        "It guarantees the contract can only change during a major version, so integration tests become unnecessary",
+        "It is only useful for SOAP/XML systems, because JSON has no formal schema"
+      ],
+      "correct": [0],
+      "explanation": "Consumer-driven contract testing (option A) inverts the usual verification: each consumer runs its own tests against a mocked provider, which generates a pact file describing the exact interactions that consumer relies on — request path/method/headers and the response shape it parses. Those pacts are published, and in the provider's CI pipeline the real provider code is replayed against every pact, so a change that would break any known consumer fails the build before deployment. The distinguishing value versus staging E2E tests is precisely that the expectations are collected from each consumer's real usage, including consumers whose code you cannot run locally — staging tests only cover the paths and shapes you thought to exercise and the clients you can actually execute. Option B is wrong: pacts verify that the provider honors the interaction contract; they do not test provider business logic (validation, pricing, authorization), so unit and integration tests remain necessary — contract tests complement them at the boundary. Option C is wrong: contract tests enforce nothing about your versioning policy; their real value is telling you when a change WOULD break someone, at which point you decide to version, coordinate, or coordinate AND version. Option D is wrong: Pact is primarily used for HTTP/JSON (and messaging) APIs; for genuine SOAP the contract lives in the WSDL/XSD, so the equivalents are XSD validation and WSDL diffing in CI — but that is about SOAP, not a reason to dismiss Pact for JSON. In a Laravel/Symfony provider pipeline, Pact verification runs as a CI job (pact-php / pact-js verifier) against a spun-up instance or a contract-testing profile of the API.",
+      "difficulty": "hard",
+      "tags": ["contract-testing", "pact", "testing", "api-design"],
+      "resources": [
+        {
+          "title": "Pact — Consumer-Driven Contract Testing",
+          "url": "https://docs.pact.io/",
+          "type": "docs",
+          "summary": "How consumers publish pacts and providers verify them in CI."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "You are building the new core domain of a system that must keep talking to a legacy subsystem whose data model and concepts contradict yours (legacy 'Customer' vs your 'Account', different status enums, different currency and ID conventions). You expect the legacy subsystem to be swappable within a few years without rewriting your domain. (a) Explain the anti-corruption layer (ACL) pattern and where exactly you place it. (b) What concrete artifacts live inside the ACL — ports, adapters, translators/DTOs, error mapping? (c) How do you prevent legacy concepts from leaking into the new domain, and how do you verify that boundary holds in CI? Give a Laravel- or Symfony-flavored example.",
+      "options": [],
+      "correct": [],
+      "explanation": "Model answer. (a) The anti-corruption layer (Fowler) is a translating boundary placed between two subsystems whose models disagree: the legacy system on one side, your new domain on the other. The ACL isolates the domain from the legacy model so the domain always speaks its own ubiquitous language and never inherits the legacy's quirks, status enums or schema — which is exactly what makes the legacy replaceable later: you only ever rewrite the adapter. It sits at every point of contact: when your app calls out to the legacy system (client-side ACL) and, symmetrically, when the legacy system calls into your app (server-side ACL / facade) if it consumes your data. (b) Concrete artifacts, inside a dedicated namespace such as App\\Integrations\\LegacyErp (Laravel) or an Acme\\Legacy integration module (Symfony): a domain port — an interface written in domain language, e.g. CustomerDirectory with find(CustomerId): Customer, or OrderGateway::placeOrder(...); an adapter implementing the port that owns all transport and deserialization (SoapClient/REST client/legacy DB access) and translates in both directions; translators/assemblers mapping legacy DTOs to domain value objects — including enum mapping (legacy status codes to domain enums), currency and ID translation (legacy numeric IDs to domain UUIDs via a mapping table where identity must be preserved); and error mapping, so the adapter converts \\SoapFault, HTTP errors or PDO quirks into domain exceptions (CustomerNotFound, ErpUnavailable) — the domain must never catch legacy exceptions. (c) Leak prevention is enforced by architecture, not discipline: dependency rules that the domain layer may only depend on the ports and never import the adapter/legacy namespace (in PHP, enforce with Deptrac rules or a PHPStan custom rule that fails any use of the legacy client namespace outside the integration module; Symfony's container wiring plus a lint test can enforce the same), the domain owns its own persistence (no foreign keys into legacy tables), and the primary verification is the adapter swap: tests run the domain against an in-memory fake or recorded fixtures of the adapter, proving the domain depends on the port alone. In Laravel you bind the interface to the concrete adapter in a service provider (app()->bind(CustomerDirectory::class, LegacyErpCustomerDirectory::class)) so swapping in a future REST adapter is a one-line rebinding; in Symfony the interface is the autowiring alias. Pragmatic senior caveat: build the ACL only where models genuinely conflict and the legacy really is expected to die — an ACL around a system that will outlive yours is ceremony; and keep translators dumb and exhaustively unit-tested, since the mapping bugs are where integration projects actually fail.",
+      "difficulty": "hard",
+      "tags": ["acl", "legacy", "architecture", "ddd", "integration"],
+      "resources": [
+        {
+          "title": "Martin Fowler — AntiCorruptionLayer",
+          "url": "https://martinfowler.com/bliki/AntiCorruptionLayer.html",
+          "type": "article",
+          "summary": "The canonical definition and motivation of the anti-corruption layer."
+        }
+      ]
+    }
+  ]
+}

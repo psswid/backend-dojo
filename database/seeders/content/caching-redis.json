@@ -1,0 +1,433 @@
+{
+  "topic": {
+    "slug": "caching-redis",
+    "name": "Caching & Redis",
+    "description": "Effective caching strategies with Laravel cache/Symfony cache and Redis: invalidation, cache stampede, rate limiting, and distributed locks.",
+    "color": "#ec4899",
+    "icon": "🗄️",
+    "sort_order": 6
+  },
+  "resources": [
+    {
+      "title": "Laravel Cache Documentation",
+      "url": "https://laravel.com/docs/11.x/cache",
+      "type": "docs",
+      "summary": "Official Laravel cache docs: drivers, Cache::remember, atomic locks via Cache::lock, and cache tags."
+    },
+    {
+      "title": "Laravel Rate Limiting Documentation",
+      "url": "https://laravel.com/docs/11.x/rate-limiting",
+      "type": "docs",
+      "summary": "Official docs for RateLimiter::for, Limit::perMinute, the throttle middleware, and Redis-backed counters."
+    },
+    {
+      "title": "Redis Data Types Overview",
+      "url": "https://redis.io/docs/latest/develop/data-types/",
+      "type": "docs",
+      "summary": "Redis documentation covering strings, hashes, lists, sets, and sorted sets with their operations and use cases."
+    },
+    {
+      "title": "Redis Persistence (RDB & AOF)",
+      "url": "https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/",
+      "type": "docs",
+      "summary": "Official Redis docs on snapshotting (RDB), append-only file (AOF) policies, and what can be lost on a crash."
+    },
+    {
+      "title": "Redis Distributed Locks and Redlock",
+      "url": "https://redis.io/docs/latest/develop/use/patterns/distributed-locks/",
+      "type": "docs",
+      "summary": "The SET NX pattern, lock ownership tokens, and the Redlock algorithm with its safety and liveness discussion."
+    },
+    {
+      "title": "Martin Fowler — CacheAside",
+      "url": "https://martinfowler.com/bliki/CacheAside.html",
+      "type": "article",
+      "summary": "Fowler on the cache-aside pattern: lazy loading of cache entries and why invalidation is your responsibility."
+    },
+    {
+      "title": "Martin Fowler — TwoHardThings",
+      "url": "https://martinfowler.com/bliki/TwoHardThings.html",
+      "type": "article",
+      "summary": "The classic quote on cache invalidation and naming things being the two hard problems in computer science."
+    }
+  ],
+  "questions": [
+    {
+      "type": "single",
+      "prompt": "Your team is designing a read-heavy product API and debating cache strategies. With the cache-aside (lazy loading) pattern, which statement correctly describes when a value is written to the cache?",
+      "options": [
+        "The cache store itself writes missing data into the cache after every cache miss, without any application involvement",
+        "On a cache miss, the application reads the value from the database and then explicitly stores it in the cache for future reads",
+        "The application writes the new value to the cache at the same moment it writes to the database, on every mutation",
+        "A scheduled job pre-warms the cache from the database at regular intervals"
+      ],
+      "correct": [1],
+      "explanation": "Cache-aside means the application is in charge: on a read you do Cache::get(key); on a miss you load from the database, Cache::put(key, value, ttl), and return the value. Laravel's Cache::remember(key, ttl, closure) is exactly this sugar, and Symfony cache pools offer the same lazy population via $pool->get($key, $callback). Option 2 describes write-through (every database write is synchronously mirrored to the cache: stronger read-after-write consistency, but the write path pays cache latency and you cache values nobody may read), and a write-behind/write-back variant does the mirroring asynchronously, e.g. writing to Redis immediately and flushing to MySQL via a queued job. Option 4 is pre-warming, not cache-aside. The key senior point: cache-aside keeps reads fast but the application owns invalidation — the cache never knows when the underlying record changed, which is why TTLs and explicit invalidation are needed.",
+      "difficulty": "easy",
+      "tags": ["caching", "cache-aside", "architecture"],
+      "resources": [
+        {
+          "title": "Martin Fowler — CacheAside",
+          "url": "https://martinfowler.com/bliki/CacheAside.html",
+          "type": "article",
+          "summary": "Reference explanation of the cache-aside pattern and its trade-offs."
+        },
+        {
+          "title": "Laravel Cache Documentation",
+          "url": "https://laravel.com/docs/11.x/cache",
+          "type": "docs",
+          "summary": "Cache::remember, Cache::get, and Cache::put implement cache-aside in Laravel."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "A user profile is read frequently, but one of its fields (last_seen) changes every few seconds. Which Redis data structure best supports updating only that single field without rewriting the whole record?",
+      "options": [
+        "A plain STRING holding the entire profile serialized as JSON, updated by GET/SET of the full payload",
+        "A HASH, so one field can be read or updated with HGET/HSET while the rest of the record stays untouched",
+        "A LIST of field/value pairs that gets a new element appended on every change",
+        "A SORTED SET keyed by user id, using the field name as the score"
+      ],
+      "correct": [1],
+      "explanation": "A Redis HASH maps a record to many fields, and HSET/HGET/HDEL are O(1) single-field operations. That matters for partial updates: with a JSON STRING, two concurrent processes doing GET-modify-SET can overwrite each other (lost updates), and you rewrite the entire payload for one field. A hash also lets you read just the needed fields with HMGET. Keep in mind the TTL applies to the whole key, not per field, in stock Redis (per-field expiry via HEXPIRE only arrived in Redis 7.4 if you need it). When the value is always consumed whole and never partially mutated, a STRING with serialized JSON is simpler and fine. A SORTED SET is for ranking members by score; a LIST is for ordered collections. In Laravel the Cache facade stores single values, so for true hash semantics you drop to the Redis layer (Redis::hset(...) with the phpredis/predis client); Symfony's RedisAdapter is also plain key-value, and raw hash access goes through the underlying client.",
+      "difficulty": "easy",
+      "tags": ["redis", "data-structures", "laravel", "symfony"],
+      "resources": [
+        {
+          "title": "Redis Data Types Overview",
+          "url": "https://redis.io/docs/latest/develop/data-types/",
+          "type": "docs",
+          "summary": "When to reach for strings, hashes, lists, sets, and sorted sets."
+        },
+        {
+          "title": "Laravel Cache Documentation",
+          "url": "https://laravel.com/docs/11.x/cache",
+          "type": "docs",
+          "summary": "The Cache facade is value-oriented; raw Redis structures need the Redis client."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "Given $summary = Cache::remember('dashboard:summary', 600, fn () => $this->expensiveReport()); what happens the very first time this line runs for the key 'dashboard:summary'?",
+      "options": [
+        "Laravel throws a CacheMissException that the caller must catch",
+        "It returns null and schedules the closure to run in the background",
+        "The closure executes, its return value is stored with a 600-second TTL, and the value is returned to the caller",
+        "It waits up to 600 seconds for another process to populate the key, then reads it"
+      ],
+      "correct": [2],
+      "explanation": "Cache::remember is get-or-compute: on the first call the key does not exist, so Laravel runs the closure, stores the result with the given TTL via Cache::put, and returns it. Every later call inside the 600-second window hits the cache and the closure is skipped. It is the Laravel sugar for the cache-aside pattern. Two senior caveats: (1) the miss path is not serialized — if 50 concurrent requests miss at the same instant, all 50 may run the expensive closure (that is the seed of a cache stampede, which atomic locks solve); (2) if you never want the entry to expire, use Cache::rememberForever, but then invalidation must be explicit or the data can go stale forever. Nothing here throws, blocks for the TTL, or defers to a background process.",
+      "difficulty": "easy",
+      "tags": ["caching", "laravel"],
+      "resources": [
+        {
+          "title": "Laravel Cache Documentation",
+          "url": "https://laravel.com/docs/11.x/cache",
+          "type": "docs",
+          "summary": "Cache::remember, rememberForever, and TTL semantics."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "Your Laravel app runs on three servers behind a load balancer, and sessions plus computed summaries are cached. Why is the default file cache store a bad choice in this setup?",
+      "options": [
+        "The file driver can only cache strings, so storing objects throws an exception immediately",
+        "Each server writes to its own local disk cache, so an entry stored by one server is invisible to the others: requests bounce between servers and repeatedly miss, and session state is not shared",
+        "File-based caches have a hard maximum TTL of one second",
+        "Files are slower than the database, so the file driver should never be used under any circumstances"
+      ],
+      "correct": [1],
+      "explanation": "The file driver keeps every value in a local file tree on the machine that wrote it. Behind a load balancer that means server A can fill the cache and server B (or C) still misses, so hit rate collapses, sessions silently drop, and per-instance counters disagree. The fix is a shared store: set CACHE_STORE=redis (or the database cache driver as a fallback) so all instances read and write the same data and can run distributed atomic locks and rate-limit counters. Note this also matters during rolling deploys: clearing cache:clear on one node at a time while others still serve traffic can briefly hurt, and per-node stores make stampedes worse. The Symfony equivalent is the same story: the filesystem adapter is local per host, while RedisAdapter (or a shared database adapter) gives you one logical cache for the whole fleet. The file driver is fine for a single server or local development; the problem is purely one of horizontal sharing, not raw speed or object support.",
+      "difficulty": "easy",
+      "tags": ["caching", "redis", "laravel", "architecture"],
+      "resources": [
+        {
+          "title": "Laravel Cache Documentation",
+          "url": "https://laravel.com/docs/11.x/cache",
+          "type": "docs",
+          "summary": "Driver overview; the file store is local per machine, Redis is shared."
+        },
+        {
+          "title": "Symfony Cache Documentation",
+          "url": "https://symfony.com/doc/current/cache.html",
+          "type": "docs",
+          "summary": "FilesystemAdapter vs RedisAdapter in a multi-instance Symfony deployment."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "Which statement about choosing a Redis data structure is correct?",
+      "options": [
+        "A LIST is the right structure for a leaderboard whose member scores change frequently",
+        "A SET is the right structure when you must count how many times each element occurs in a stream",
+        "For a counter that must reset at a fixed boundary (per user, per minute), a STRING with INCR under a key that encodes the bucket, e.g. rate:user:7:20260601-1015, plus an EXPIRE, is the standard approach",
+        "A SORTED SET cannot change a member's score after insertion"
+      ],
+      "correct": [2],
+      "explanation": "Scores that change map to a SORTED SET: ZADD updates a member's score in O(log n) and ZREVRANGE gives you the top N — that is precisely what ZADD exists for, so option 4 is backwards. A SET deduplicates members and cannot count occurrences; occurrence counting needs INCR counters or a hash of counters. Option 2 is the classic fixed-window rate counter: one key per bucket (user + time slice), INCR is atomic and returns the new count, and EXPIRE lets the bucket die so inactive users do not accumulate keys. Quick structure recap a senior should rattle off: STRING for scalars, counters (INCR/DECR), and simple values; HASH for objects with mutable fields; LIST for ordered queues (LPUSH/BRPOP); SET for unique membership and set algebra (tags, friend graphs); SORTED SET for rankings, leaderboards, and time-ordered queues where the score is a timestamp. Laravel's Cache facade hides these (it stores single serialized values), so raw structures are used through the Redis facade or the phpredis/predis client; Symfony's RedisAdapter is equally value-oriented.",
+      "difficulty": "medium",
+      "tags": ["redis", "data-structures", "rate-limiting"],
+      "resources": [
+        {
+          "title": "Redis Data Types Overview",
+          "url": "https://redis.io/docs/latest/develop/data-types/",
+          "type": "docs",
+          "summary": "Canonical guide to when each Redis data type fits."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "Scenario: your product detail page is rendered from cached data with a 15-minute TTL. A store manager edits the price of one product and expects the change to appear on the public site immediately, while all other products keep their cache. How do you handle invalidation, and what are the trade-offs between TTL-based expiry and explicit invalidation? Describe your approach in Laravel or Symfony terms, including how you keep key naming sane at scale.",
+      "options": [],
+      "correct": [],
+      "explanation": "Model answer. Explicit invalidation on the write path: wherever the price changes (controller, service, or an event listener such as Product::updated or a ProductPriceChanged domain event), delete exactly the affected keys, e.g. Cache::forget('product:' . $product->id . ':detail'), or recompute lazily by forgetting so the next read rebuilds. The trade-offs: explicit invalidation gives immediate consistency and no stale data, but it couples every writer to the readers' key-naming convention — a misspelled key prefix, a write that bypasses the code path (raw SQL, admin tools, a queue job, another service) silently leaves stale data. That is why TTLs remain essential as a bounded-staleness backstop: even a correct flush should be paired with a short TTL (minutes, not hours) so nothing is stale forever when a path is missed. TTL-only expiry is simpler and self-healing but gives no write-time control: you accept up to 15 minutes of stale prices. For grouped data use cache tags where the store supports them (Redis, database, memcached, and array — not file or DynamoDB): Cache::tags(['products', 'product:' . $id])->remember(...) and later Cache::tags(['product:' . $id])->flush(); remember tag flushes are not atomic with concurrent writers. A robust alternative many teams prefer is versioning/cache-busting keys: keep an updated_at timestamp or a per-record version and bake it into the key (product:12:detail:v20260601123000) so a change simply makes the old key unreachable and the next read builds a fresh one — no scan-and-delete needed, and it plays well when multiple services share the data (each service bumps its own version). Senior framing: invalidation is hard because writers, readers, key names, and cache layers (browser, CDN, HTTP cache, Redis) are spread across the system, so design a naming contract (one shared key-builder class/helper), invalidate on the write path for hot/important data, version keys for shape changes across deploys, and keep TTL as the ceiling on staleness. In Symfony the same ideas map to named cache pools, TagAwareAdapter for grouped invalidation, and versioned keys built with the pool's get() callback.",
+      "difficulty": "medium",
+      "tags": ["caching", "invalidation", "laravel", "symfony", "architecture"],
+      "resources": [
+        {
+          "title": "Martin Fowler — TwoHardThings",
+          "url": "https://martinfowler.com/bliki/TwoHardThings.html",
+          "type": "article",
+          "summary": "Why cache invalidation is one of the two hard problems."
+        },
+        {
+          "title": "Laravel Cache Documentation",
+          "url": "https://laravel.com/docs/11.x/cache",
+          "type": "docs",
+          "summary": "Cache::forget, cache tags, and versioned key patterns."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "A /reports/summary endpoint is hit 50 times per second and the summary takes about two seconds to compute. The cached value expires at midnight and every concurrent request misses at once, so many processes each start recomputing it — a cache stampede (thundering herd). Which Laravel approach prevents the duplicate recomputation?",
+      "options": [
+        "Serialize the rebuild behind a Redis atomic lock: acquire Cache::lock('reports:summary', 10), and when acquired re-check the cache and recompute only if it is still missing (double-checked locking); the other requests wait briefly with block() or fall back to a slightly stale value instead of each recomputing",
+        "Switch the key to Cache::rememberForever so the value can never expire",
+        "Call Cache::flush() a few seconds before the expiry moment so the rebuild happens on a predictable schedule",
+        "Raise max_execution_time so all 50 concurrent requests can finish recomputing"
+      ],
+      "correct": [0],
+      "explanation": "Cache::lock(name, seconds) creates a distributed lock backed by Redis SET with NX and an expiry (atomic acquire). The stampede-proof pattern is: acquire the lock, then inside the critical section re-check the cache (the winner may have stored the value while you were waiting — double-checked locking), recompute and Cache::put only if it is still missing, then release in a finally block. For requests that must wait for the winner instead of failing, Laravel offers the blocking acquire — the 'lockFor(n)' idea people describe — via Cache::lock('reports:summary', 10)->block(5, $callback), which polls for up to 5 seconds and runs the callback once the lock is obtained; if no result is available, serve the previous (stale) value: a classic stale-while-revalidate fallback beats a 502. rememberForever only postpones the problem and makes staleness permanent. Cache::flush before expiry makes the stampede worse. Two honorable mentions for a senior: Symfony Cache ships built-in stampede protection through its get() callback contract (early expiration / compute-on-expiration semantics, where one process recomputes in the background while others are served stale data), and many teams add TTL jitter (base TTL plus a small random offset) so keys do not all expire in the same second. The queue-based alternative is refresh-ahead: a scheduled job re-warms the key shortly before it expires.",
+      "difficulty": "medium",
+      "tags": ["caching", "redis", "concurrency", "laravel", "symfony"],
+      "resources": [
+        {
+          "title": "Laravel Cache Documentation",
+          "url": "https://laravel.com/docs/11.x/cache",
+          "type": "docs",
+          "summary": "Atomic locks section: Cache::lock, get(), block(), and release()."
+        },
+        {
+          "title": "Cache stampede — Wikipedia",
+          "url": "https://en.wikipedia.org/wiki/Cache_stampede",
+          "type": "article",
+          "summary": "Background on the thundering-herd problem and mitigation taxonomy."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "You must enforce a limit of 60 API requests per user per minute. A naive fixed window aligned to clock minutes lets a user send 60 requests in 09:59:00–09:59:59 and another 60 in 10:00:00–10:00:59 — up to 120 in two consecutive seconds around the boundary. Which statement about implementing a correct limiter is true?",
+      "options": [
+        "A true sliding window needs sub-minute accounting of hit times (sorted sets of request timestamps or per-second INCR buckets, evaluated over the trailing 60 seconds); Laravel's built-in attempt limiter is a decaying counter that is good enough for most APIs, and Symfony ships sliding_window and token_bucket limiter policies for the strict cases",
+        "Lower the fixed-window TTL to 59 seconds so requests near the boundary land in different buckets",
+        "Keep one STRING counter per user that never expires and divide by elapsed time yourself",
+        "Raise the limit to 120 requests per minute so the doubled burst fits inside a single window"
+      ],
+      "correct": [0],
+      "explanation": "Fixed windows burst around boundaries by construction. Exact fixes: a sliding window log that records every hit time in a Redis sorted set (ZADD now, ZREMRANGEBYSCORE 0 to (now - 60s), then ZCARD) gives a precise trailing 60-second count at the cost of memory per hit; a cheaper hybrid keeps one counter per second and sums the last 60 buckets. In Laravel, RateLimiter::for('api', fn (Request $request) => Limit::perMinute(60)->by($request->user()?->id ?: $request->ip())) defines a named limiter whose counters live in the default cache store — so CACHE_STORE=redis is required for shared counting across instances (a file store would count per server). The built-in limiter is an attempt-based decaying counter rather than a strict sliding window, which is fine for most products; Laravel also exposes RateLimiter::hit, attempt, remaining, retryAfter and the throttle middleware that returns 429 with Retry-After headers. When you need strict semantics, Symfony's RateLimiter component (symfony/rate-limiter) provides explicit policies — fixed_window, sliding_window, and token_bucket — with RedisStorage for multi-instance use; a token bucket allows controlled bursts up to its capacity and refills at a steady rate, which is a different, often preferable contract than 'N per wall-clock minute'. Laravel teams implement token buckets or sliding windows on Redis with a small Lua script (or a library) when product requirements demand it.",
+      "difficulty": "medium",
+      "tags": ["redis", "rate-limiting", "laravel", "symfony", "concurrency"],
+      "resources": [
+        {
+          "title": "Laravel Rate Limiting Documentation",
+          "url": "https://laravel.com/docs/11.x/rate-limiting",
+          "type": "docs",
+          "summary": "RateLimiter::for, Limit::perMinute, throttle middleware, and Redis-backed counters."
+        },
+        {
+          "title": "Redis Rate Limiting Patterns",
+          "url": "https://redis.io/docs/latest/develop/use/patterns/rate-limiting/",
+          "type": "docs",
+          "summary": "Fixed window, sliding window, and token bucket implementations on Redis."
+        },
+        {
+          "title": "Symfony Rate Limiter Documentation",
+          "url": "https://symfony.com/doc/current/rate_limiter.html",
+          "type": "docs",
+          "summary": "Symfony limiter policies: fixed_window, sliding_window, and token_bucket with RedisStorage."
+        }
+      ]
+    },
+    {
+      "type": "multi",
+      "prompt": "Cache failure modes are often confused with each other. Which two descriptions are correct?",
+      "options": [
+        "Cache penetration: requests that no cache layer can ever absorb because the key does not exist in the cache or in the database (for example probes with random ids), so every request falls through to the database",
+        "Cache breakdown: Redis itself restarts and all keys disappear at once, taking the whole cache down in a single event",
+        "Cache breakdown (hotspot): a single extremely hot key expires and many concurrent requests all try to rebuild it against the database at the same moment — a thundering herd",
+        "Cache avalanche: an attacker intentionally requests thousands of nonexistent keys to exhaust the database connection pool"
+      ],
+      "correct": [0, 2],
+      "explanation": "The three modes are distinct. Penetration (option 0) is about keys that cannot be cached because nothing exists behind them: every request for a random or deleted id sails past an empty cache straight to the database. Fixes: validate inputs up front, cache the negative result for a short TTL (Cache::put('product:999999', null, 60) or a small sentinel value so the miss is absorbed), or use a Bloom filter over existing ids. Breakdown, also called a hotspot (option 2), is one very popular key expiring under load so thousands of requests stampede the database to rebuild it — mitigated with atomic locks / Cache::lock and block(), no-expiry plus background refresh for the hottest keys, or a small in-process layer in front of Redis. Avalanche (not in the options as stated) is many keys dying at once — uniform TTLs (everything set with the same 3600 seconds expires in the same second), a mass restart after a deploy that leaves the cache empty, or a Redis restart wiping everything — mitigated with TTL jitter (3600 + random(0, 300)), staggered warm-up, and Symfony cache warmers or a Laravel re-warm job after deploys. Option 1 mislabels the restart case (that is an avalanche trigger) and option 4 describes penetration, not an avalanche. Senior interviewers look for exactly this clean separation plus the concrete mitigations.",
+      "difficulty": "medium",
+      "tags": ["caching", "redis", "failure-modes", "architecture"],
+      "resources": [
+        {
+          "title": "Laravel Cache Documentation",
+          "url": "https://laravel.com/docs/11.x/cache",
+          "type": "docs",
+          "summary": "Stores and locks used in the mitigation patterns above."
+        },
+        {
+          "title": "Cache stampede — Wikipedia",
+          "url": "https://en.wikipedia.org/wiki/Cache_stampede",
+          "type": "article",
+          "summary": "Thundering-herd terminology and mitigations (locks, jitter, refresh-ahead)."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "Two application instances process webhook jobs for the same order concurrently. Your team proposes a Redis distributed lock: each job first acquires Cache::lock('order:4711:processing', 30) and aborts if it cannot. Design this carefully: lock ownership, expiry versus job duration, safe release, and what happens when Redis restarts or fails over. Where, if at all, does Redlock fit — and what are its known caveats?",
+      "options": [],
+      "correct": [],
+      "explanation": "Model answer. Mechanics: Cache::lock(name, seconds) in Laravel is Redis SET with NX and an expiry, so acquisition is atomic. Always carry an owner identity: $lock->owner() returns a unique token and release() only deletes the key when the token matches (a compare-and-delete script), so an expired lock held by a slow worker can never be released by someone else. Production shape: $lock = Cache::lock('job:order:4711', 60); if (! $lock->get()) { return; } try { process(); } finally { $lock->release(); } — the callback form Cache::lock('key', 60)->get(fn () => process()) does acquire-run-release for you. Expiry vs job duration is the central trap: if the job runs longer than the TTL, the lock expires, a second instance acquires it, and two workers run the same order. Options: size the TTL well above the worst-case critical section; split work into small steps each under its own short lock; or renew the lock in a heartbeat loop (Laravel does not auto-renew, so implement refresh() periodically if you need it). Symfony maps to the Lock component: (new LockFactory(new RedisStore(...)))->createLock('order:4711', $ttl) with acquire(), refresh(), release() and auto-release on destruct. Always pair the lock with idempotency: unique constraint or processed-marker in the database, because a lock is a liveness optimization, not a correctness guarantee. Redis restart: with no persistence the lock simply vanishes and two workers may both proceed — tolerate it via idempotency, or configure AOF; note replication is asynchronous, so on master failover a lock written to the old master can be lost, which is precisely the case Redlock targets. Redlock (acquire the lock on N independent Redis masters, require a majority) has real caveats: with a pause or GC stop that outlasts the lock TTL, or clock jumps between nodes, two clients can hold the same lock simultaneously, and Redlock alone provides no fencing (Martin Kleppmann's analysis; antirez's rebuttal argues the model is fine under its stated assumptions). Senior verdict for most teams: a single well-configured Redis lock with owner tokens, TTLs above the critical section, idempotent workers, and short jobs is the right answer; reach for Redlock only when you truly need mutual exclusion across independent regions or failure domains, and even then combine it with fencing tokens or versioned resources. Symfony's Lock component and Laravel's atomic locks are both wrappers around this same SET NX EX semantics.",
+      "difficulty": "hard",
+      "tags": ["redis", "distributed-locks", "concurrency", "laravel", "symfony"],
+      "resources": [
+        {
+          "title": "Redis Distributed Locks and Redlock",
+          "url": "https://redis.io/docs/latest/develop/use/patterns/distributed-locks/",
+          "type": "docs",
+          "summary": "SET NX pattern, ownership tokens, and the Redlock algorithm and its guarantees."
+        },
+        {
+          "title": "Martin Kleppmann — How to do distributed locking",
+          "url": "https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html",
+          "type": "article",
+          "summary": "The critique of Redlock: pauses, clock jumps, and fencing tokens."
+        },
+        {
+          "title": "Symfony Lock Component Documentation",
+          "url": "https://symfony.com/doc/current/components/lock.html",
+          "type": "docs",
+          "summary": "Symfony LockFactory with RedisStore, acquire/refresh/release semantics."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "Redis holds your application cache plus distributed locks and rate-limit counters. The server crashes and restarts. Which statement about Redis persistence is correct?",
+      "options": [
+        "If only RDB snapshots are configured (for example every 60 seconds), a crash can lose every write since the last snapshot — including a just-acquired lock release or a counter decrement — so clients must tolerate that loss window",
+        "AOF is always safer than RDB and can never lose data, regardless of the appendfsync setting",
+        "RDB snapshots replay every individual command at startup, so recovery from an RDB file is slow for large datasets",
+        "Persistence settings do not matter for locks, because Redis locks are guaranteed to survive a restart"
+      ],
+      "correct": [0],
+      "explanation": "RDB is a point-in-time binary snapshot taken on a schedule (the default config snapshots after 900s with 1 change, 300s with 10, 60s with 10,000), so a crash loses everything written since the last successful snapshot — that is a bounded but real loss window, and startup from RDB is fast because it loads one snapshot, not a command log (option 3 reverses RDB and AOF). AOF appends each write and replays it at startup; its durability depends on appendfsync: always (fsync per command — safest, slowest), everysec (default; about one second of loss), or no (OS decides, larger loss). So option 1 is wrong: 'everysec' and 'no' can both lose data, and even 'always' does not cover a crash mid-command. Option 4 is the dangerous assumption: a lock is a volatile key; if Redis dies without persisting it, the lock vanishes and two workers may both hold it — exactly why idempotent workers and owner tokens matter. The senior framing is to decide per use: a pure cache tolerates loss (the app just recomputes), so RDB or even no persistence plus a replica is fine; but correctness-critical state (locks, rate counters, and anything you cannot recompute) either needs AOF with an appropriate fsync policy or — more pragmatically — application-level tolerance (idempotency keys, re-acquire loops) because no Redis persistence mode makes distributed mutual exclusion crash-proof. AOF rewrites (BGREWRITEAOF) keep the log compact; Redis 7.x multi-part AOF improves rewrite robustness.",
+      "difficulty": "hard",
+      "tags": ["redis", "persistence", "durability"],
+      "resources": [
+        {
+          "title": "Redis Persistence (RDB & AOF)",
+          "url": "https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/",
+          "type": "docs",
+          "summary": "Snapshotting, AOF fsync policies, and crash-loss windows."
+        },
+        {
+          "title": "Laravel Cache Documentation",
+          "url": "https://laravel.com/docs/11.x/cache",
+          "type": "docs",
+          "summary": "Atomic locks on Redis; what lock loss means for job workers."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "A colleague writes Cache::remember('report:weekly', 3600, fn () => Report::with('lines')->find($id)) and happily stores the Eloquent model in the cache. Which statement describes the real senior-level concern?",
+      "options": [
+        "Laravel refuses to serialize Eloquent models, so this call always throws a LogicException at runtime",
+        "It works mechanically, but the cache now holds a serialized snapshot of an ORM object: the model never invalidates when the row changes, the pre-loaded lines relation is frozen at serialization time, relations lazy-loaded later hit the database from cached data, hidden/appended attributes are whatever they were when serialized, and a deploy that changes the class shape (new fields, renamed columns, removed relations) can make old cached objects misbehave or fail to unserialize — caching plain arrays, JSON, or DTOs behind a versioned key is the robust design",
+        "Eloquent models self-invalidate: saving the model automatically flushes every cache key that referenced it",
+        "Only the database cache driver can store Eloquent models; the Redis driver silently strips object state"
+      ],
+      "correct": [1],
+      "explanation": "Serialization is the hidden cost. Laravel serializes cache values with PHP serialize (or igbinary) so Eloquent models technically store and restore fine — option 0 is false — but what you get back is a frozen object graph. It never learns about database changes (no hook fires on save, option 2 is a fantasy), the eagerly loaded lines relation is a stale snapshot while the model id stays the same, and any relation you touch after retrieval that was not loaded runs a new query on possibly outdated cached data — the classic stale-plus-N+1 combination. Serialized objects also freeze class metadata: hidden and appended attribute state, casts, and dates are baked in, and after deploys that add or rename columns, remove relations, or change casts, unserializing old entries can behave unpredictably or fail. Practical rules: cache final representations, not ORM instances — toArray()/toJson() output or a small immutable DTO — version the key when the representation's shape can change (report:weekly:v2), and prefer computing in the closure from fresh queries over caching long-lived object graphs. The same principle holds in Symfony: cache plain data or serialized DTOs with explicit versions, and think about what happens to cached objects across deployments before you cache them. If you must cache a model, at least document the version coupling and add a smoke test that reads a cached entry after the shape changes.",
+      "difficulty": "hard",
+      "tags": ["caching", "serialization", "laravel", "symfony"],
+      "resources": [
+        {
+          "title": "Laravel Cache Documentation",
+          "url": "https://laravel.com/docs/11.x/cache",
+          "type": "docs",
+          "summary": "What cache stores serialize and why plain values are preferred."
+        },
+        {
+          "title": "Symfony Cache Documentation",
+          "url": "https://symfony.com/doc/current/cache.html",
+          "type": "docs",
+          "summary": "Caching serialized objects and versioning cached data."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "Your platform tracks product views and shows a per-product 'views today' counter on a dashboard. Traffic peaks at 5,000 views per second spread across many products, and the MySQL write path is the bottleneck. Compare cache-aside, write-through, and write-behind (write-back) for this counter, choose one, and defend it — including the durability and consistency consequences, and where you would decide not to cache at all.",
+      "options": [],
+      "correct": [],
+      "explanation": "Model answer. This is not a classic read cache: it is a write-heavy counter, so treat Redis as the system of record for the counter and flush to MySQL asynchronously — write-behind. Each view is one atomic Redis INCR (Cache::increment('views:product:12:2026-06-01') with a TTL so stale buckets self-expire), which easily absorbs 5,000 ops/s, and a scheduled/queued drain job periodically pushes deltas to MySQL: read the Redis value, compare it with the last-flushed value (stored alongside, e.g. in a hash or a second key), and INSERT/UPDATE the delta — or simpler, store only the delta by having the drain job subtract what it already flushed. Consequences you must defend: durability is bounded by Redis persistence plus the drain interval — a Redis crash can lose recent counts (mitigate with AOF or accept it for analytics-grade numbers, and use Redis replication); consistency is eventually consistent, so the dashboard can lag by seconds and a read-your-own-write guarantee must not be promised. Why not the alternatives: write-through would synchronously UPDATE MySQL per view, which is exactly the bottleneck you are avoiding, and it is only worth it when reads-after-writes must be immediately consistent (cart totals, account balances) — at the price of write latency and caching data that may never be read again. Cache-aside is wrong for counters in two ways: the first read of the day computes a value that already diverges the moment it is cached, and GET-modify-SET updates race, losing increments — unless you use INCR directly, which is no longer cache-aside but Redis-as-counter. Laravel mechanics: the drain job is a Laravel queue job dispatched by the scheduler, or an artisan command run every minute; keep a Redis SET of product ids with pending counts so the job only touches active keys; each flush must be idempotent (store last-flushed value, or use per-product Cache::lock for the read-delta-write so two drains never double-count). Symfony maps to the same pattern with the Redis client for INCR plus Messenger async handlers as the write-behind path. When NOT to cache: values that are cheap to compute, per-user high-churn data with no shared benefit, data that must be strongly consistent immediately after every write (cache adds a consistency window), payloads so large that memory and serialization overhead exceed the recompute cost, and anything written but never read — caching is an optimization for read-heavy, moderately-stale-tolerant, regenerable data, and the interview bonus is saying that out loud before designing anything.",
+      "difficulty": "hard",
+      "tags": ["caching", "redis", "write-behind", "architecture", "laravel", "symfony"],
+      "resources": [
+        {
+          "title": "Redis Data Types Overview",
+          "url": "https://redis.io/docs/latest/develop/data-types/",
+          "type": "docs",
+          "summary": "Atomic INCR semantics and counters on Redis."
+        },
+        {
+          "title": "Redis Persistence (RDB & AOF)",
+          "url": "https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/",
+          "type": "docs",
+          "summary": "Loss windows to weigh when Redis is the counter's system of record."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "You group product cache entries with tags: Cache::tags(['product', 'product-' . $product->id])->remember('product:' . $product->id . ':detail', 3600, $fn), then flush a single product's entries with Cache::tags(['product-12'])->flush(). Which statement about cache tags is correct?",
+      "options": [
+        "Tag flushes work identically on every cache driver Laravel ships, including file and array",
+        "Tags add bookkeeping: Laravel records per-tag sets of key names (on Redis via its own keys), and a flush removes those keys and the tag sets — but the operation is not atomic, so an entry written by a concurrent request during the flush can survive or be missed; tags are also unsupported on the file and DynamoDB drivers, so Redis or the database store is the production choice",
+        "Flushing a tag automatically cascades into the database queries that produced the entries, making stale reads impossible",
+        "Tagging a remember call with two tags doubles the entry's TTL"
+      ],
+      "correct": [1],
+      "explanation": "Cache tags give you grouped invalidation: instead of knowing every key that mentions product 12, you flush the group — Cache::tags(['product-12'])->flush() removes the detail, price, stock, and any other entries tagged product-12. The cost is bookkeeping: Laravel stores each tag's membership (a set of the real cache key names) and a flush must read those members, delete each referenced key, and then delete the tag sets — several round trips that are not atomic, so a remember() running concurrently can re-add an entry the flush already deleted (or finish after the membership was read and never get flushed). That is why the Laravel docs restrict tags to the drivers that implement them (Redis, database, memcached, and array) and explicitly exclude file and DynamoDB. Option 3 is magical thinking: tags know cache keys, not SQL. Option 4 is nonsense. Senior comparison: Symfony's TagAwareAdapter solves the same problem differently — it stores a per-tag version and bakes it into internal cache keys, so invalidateTags() is a cheap, near-atomic version bump that makes old entries unreachable without enumerating them. And always remember the simpler alternative: versioned keys (product:12:detail:v42) need no tag bookkeeping at all — the version read is one cheap GET and invalidation is one INCR/SET — which is why many teams prefer versioning over tags for hot paths.",
+      "difficulty": "hard",
+      "tags": ["caching", "redis", "tags", "laravel", "symfony"],
+      "resources": [
+        {
+          "title": "Laravel Cache Documentation",
+          "url": "https://laravel.com/docs/11.x/cache",
+          "type": "docs",
+          "summary": "Cache tags section: supported drivers, tagged remember, and flush semantics."
+        },
+        {
+          "title": "Symfony Cache Documentation",
+          "url": "https://symfony.com/doc/current/cache.html",
+          "type": "docs",
+          "summary": "TagAwareAdapter and version-based tag invalidation."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,422 @@
+{
+  "topic": {
+    "slug": "architecture-scalability",
+    "name": "Architecture & Scalability (Peak Traffic)",
+    "description": "Designing Laravel/Symfony systems that survive peak traffic: monolith vs microservices, horizontal scaling, and bottleneck elimination.",
+    "color": "#8b5cf6",
+    "icon": "📈",
+    "sort_order": 5
+  },
+  "resources": [
+    {
+      "title": "Microservices - Martin Fowler",
+      "url": "https://martinfowler.com/articles/microservices.html",
+      "type": "article",
+      "summary": "The canonical definition of microservices and the organizational forces behind the style."
+    },
+    {
+      "title": "Microservice Trade-Offs - Martin Fowler",
+      "url": "https://martinfowler.com/articles/microservice-trade-offs.html",
+      "type": "article",
+      "summary": "Honest accounting of what splitting into services costs, and why monolith-first is the mainstream default."
+    },
+    {
+      "title": "Laravel Octane Documentation",
+      "url": "https://laravel.com/docs/12.x/octane",
+      "type": "docs",
+      "summary": "Serving Laravel from long-running workers (Swoole/RoadRunner/FrankenPHP) and the state-management rules that come with it."
+    },
+    {
+      "title": "Laravel Cache Documentation",
+      "url": "https://laravel.com/docs/12.x/cache",
+      "type": "docs",
+      "summary": "Redis-backed caching, Cache::remember, locks and stampede control - the first scaling lever in Laravel."
+    },
+    {
+      "title": "Laravel Queues Documentation",
+      "url": "https://laravel.com/docs/12.x/queues",
+      "type": "docs",
+      "summary": "Decoupling work with jobs, Redis drivers, retries and backoff - the backpressure mechanism of a Laravel app."
+    },
+    {
+      "title": "Laravel Database: Read & Write Connections",
+      "url": "https://laravel.com/docs/12.x/database#read-and-write-connections",
+      "type": "docs",
+      "summary": "Configuring read replicas and the sticky flag so reads and writes are routed correctly."
+    },
+    {
+      "title": "Laravel Session Documentation",
+      "url": "https://laravel.com/docs/12.x/session",
+      "type": "docs",
+      "summary": "Moving sessions from per-server files to shared Redis so app servers stay stateless."
+    },
+    {
+      "title": "PgBouncer Usage Documentation",
+      "url": "https://www.pgbouncer.org/usage.html",
+      "type": "docs",
+      "summary": "Pooling modes (session vs transaction) and the session-level features that break under transaction pooling."
+    },
+    {
+      "title": "Metrics, tracing, and logging - Peter Bourgon",
+      "url": "https://peter.bourgon.org/blog/2017/02/21/metrics-tracing-and-logging.html",
+      "type": "article",
+      "summary": "The classic framing of the three observability pillars and which one to reach for during an incident."
+    },
+    {
+      "title": "System Design Primer",
+      "url": "https://github.com/donnemartin/system-design-primer",
+      "type": "docs",
+      "summary": "Broad system-design reference covering caching, replication, load balancing and back-of-envelope capacity planning."
+    }
+  ],
+  "questions": [
+    {
+      "type": "single",
+      "prompt": "Your Laravel API running on one server reaches 100% CPU during a traffic spike. Option 1 is upgrading that instance to more vCPUs and RAM. Option 2 is putting two cheaper identical instances behind a load balancer. How are these two approaches correctly named, and what is the key trade-off?",
+      "options": [
+        "Option 1 is horizontal scaling and option 2 is vertical scaling; horizontal is always cheaper, so it is strictly better.",
+        "Option 1 is vertical scaling and option 2 is horizontal scaling. Horizontal adds capacity in repeatable steps you can later automate with autoscaling, but it requires stateless app servers; vertical scaling hits a single-machine ceiling and gives you no redundancy.",
+        "Both are forms of horizontal scaling; the only difference is where the load balancer sits.",
+        "Option 1 is vertical scaling and option 2 is horizontal scaling, but horizontal scaling only works for read traffic because writes must always stay on one server."
+      ],
+      "correct": [1],
+      "explanation": "Vertical scaling means giving one machine more vCPUs, RAM or disk: simple, but you hit a hardware ceiling, pay for idle headroom, and keep a single point of failure. Horizontal scaling means adding more application servers behind a load balancer: capacity grows in small, repeatable steps and can later be automated with autoscaling rules based on CPU, request rate or queue depth. PHP is well suited to this - every HTTP request into Laravel or Symfony is independent, so you can add php-fpm nodes freely, provided the app is truly stateless. That is the hidden condition: sessions, cache and queue state must live in a shared store such as Redis (config/session.php driver=redis), and uploaded files must go to object storage, not a local disk that only one node sees. Note that the relational database does not scale this way: a primary is effectively single-writer, so while the app tier is easy to grow horizontally, the DB is the real ceiling - which is why the rest of this topic (replicas, caching, queues, pooling) exists. A sharp interview point: adding nodes to an app that secretly stores state on local disk does not scale your system, it multiplies your bugs.",
+      "difficulty": "easy",
+      "tags": ["scaling", "architecture", "horizontal-scaling"],
+      "resources": [
+        {
+          "title": "Laravel Deployment Documentation",
+          "url": "https://laravel.com/docs/12.x/deployment",
+          "type": "docs",
+          "summary": "Environment configuration, optimization and the statelessness assumptions of a horizontally scaled Laravel app."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "You deployed a Laravel app on two servers behind a load balancer. Authentication worked on a single server, but now users are randomly logged out when they refresh the page. Sessions are configured with the file driver in config/session.php (SESSION_DRIVER=file). What is happening, and what is the correct fix?",
+      "options": [
+        "The load balancer is stripping the session cookie; enable sticky sessions to keep the cookie intact.",
+        "The session file was written onto whichever server handled the login request, so the other server does not recognize the session. Move sessions to a shared store such as Redis.",
+        "Two servers cannot share one Laravel application; you must deploy a separate database per server so each node has its own data.",
+        "Each server encrypts cookies with a different APP_KEY; share one APP_KEY between both servers."
+      ],
+      "correct": [1],
+      "explanation": "With the file driver, Laravel stores the session in storage/framework/sessions on the server that handled the login request. The load balancer may route the next request to the other node, whose local file store has no such session, so the user appears logged out - and magically logged in again when traffic routes back to the first node. Sticky sessions only mask this by pinning a client to one server, which reintroduces stateful nodes and breaks redundancy and autoscaling. The correct fix is to make the servers stateless and store sessions in a shared, fast store: in Laravel set SESSION_DRIVER=redis (driver => redis in config/session.php) so any node can validate any session. The general principle is statelessness: application servers must hold no user- or request-specific state, so any request can be served by any node and nodes can be added, removed or auto-scaled freely. State belongs in Redis (sessions, cache, queues); durable files belong in object storage such as S3, not local disk. In Symfony the same rule applies: configure the redis session save handler, or go fully stateless with opaque or signed tokens validated per request. A good extra remark: the APP_KEY can be shared between nodes - encryption works fine across servers - but file-backed state is what breaks.",
+      "difficulty": "easy",
+      "tags": ["statelessness", "sessions", "redis", "load-balancing"],
+      "resources": [
+        {
+          "title": "Laravel Session Documentation",
+          "url": "https://laravel.com/docs/12.x/session",
+          "type": "docs",
+          "summary": "Session drivers including the shared Redis store used for horizontally scaled deployments."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "A senior engineer says: before you buy another server or open more database connections, cache. Which reason best explains why caching is usually the first scaling lever for a Laravel or Symfony application under read-heavy load?",
+      "options": [
+        "Reads dominate web workloads and repeat heavily, so caching removes expensive repeated work (database queries, rendered fragments, external calls) from the per-request critical path, letting one server serve far more users before you need more hardware.",
+        "Caching lets you delete the database entirely and serve all data from memory.",
+        "Caching is only about images and CSS, which the web server already handles by itself.",
+        "Caching reduces code complexity because you no longer need transactions or validation."
+      ],
+      "correct": [0],
+      "explanation": "Read traffic dominates almost every web workload, and most reads repeat: the same product page, feed or aggregate is requested thousands of times. Caching removes that repeated expensive work - database queries, template rendering, external API calls - from the request path, so one server serves dramatically more users before you need more hardware. A senior answer names the layers top-down: (1) edge/HTTP caching - a CDN or reverse proxy serves static assets and fully cacheable pages from the location nearest the user, cutting origin and database traffic; (2) application caching - the Laravel Cache facade with the Redis driver, e.g. Cache::remember('product.'.$id, 600, fn () => ...), storing query results and rendered fragments (Symfony Cache, PSR-6/16, plays the same role); (3) opcache, which stores compiled PHP bytecode so each request does not recompile the framework. Caching is the first lever because it is cheap, reversible and cuts the real bottleneck - the database - instead of buying hardware around it. The price is invalidation: stale data, plus cache stampedes when a hot key expires at peak and hundreds of requests recompute it simultaneously - which is why locks or atomic refreshes exist for expensive keys. Do not confuse opcache (bytecode) with application caching, and never cache writes or user-specific content carelessly.",
+      "difficulty": "easy",
+      "tags": ["caching", "redis", "cdn", "scalability"],
+      "resources": [
+        {
+          "title": "Laravel Cache Documentation",
+          "url": "https://laravel.com/docs/12.x/cache",
+          "type": "docs",
+          "summary": "Redis cache stores, Cache::remember and atomic locks for stampede control."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "A product company with one Laravel application and roughly ten engineers is preparing for a marketing event that could multiply traffic several times. Several engineers argue for going microservices now so each service can scale independently. What is the mainstream senior recommendation?",
+      "options": [
+        "Start with microservices immediately; retrofitting a monolith into services later is nearly impossible.",
+        "Keep one codebase but structure it as a modular monolith with clear internal boundaries, and extract services only when a concrete need (team ownership, independent release cadence, genuinely different scaling) proves it.",
+        "Always keep a classic monolith with no internal boundaries at all; modules create accidental complexity.",
+        "Move every HTTP route to an individual serverless function, which is the same thing as microservices but cheaper to operate."
+      ],
+      "correct": [1],
+      "explanation": "A monolith is not a scaling problem. Laravel and Symfony applications are stateless per request, so a well-built monolith scales horizontally behind a load balancer exactly like a set of services would; a traffic spike is handled with replicas, caching, queues and database headroom, none of which require splitting code. Mainstream senior guidance - Martin Fowler's MonolithFirst argument and his microservice trade-offs - is therefore: default to a modular monolith, meaning one deployable with explicit internal boundaries (bounded contexts, disciplined namespaces and controlled dependencies between modules), and extract a service only when a concrete driver appears: a team large enough that ownership and release coupling hurt (Conway's law - architecture copies communication structure), a part needing genuinely different scaling or runtime characteristics, or an isolation requirement such as security or regulation. Splitting has real costs: network failure modes, distributed data and consistency (an ACID transaction cannot span services; you inherit sagas and eventual consistency), joins across services, observability overhead, duplicated auth and catalog lookups, and N deploy pipelines to operate. In Laravel terms the modular monolith stays one Octane-friendly artifact that deploys as one unit; the moment you split, you trade single-request transactions for distributed headaches. The interview trap: traffic alone never justifies microservices - cache and scale the monolith first.",
+      "difficulty": "easy",
+      "tags": ["architecture", "monolith", "microservices", "modular-monolith"],
+      "resources": [
+        {
+          "title": "Microservices - Martin Fowler",
+          "url": "https://martinfowler.com/articles/microservices.html",
+          "type": "article",
+          "summary": "Defines microservices and the organizational forces that justify them."
+        },
+        {
+          "title": "Microservice Trade-Offs - Martin Fowler",
+          "url": "https://martinfowler.com/articles/microservice-trade-offs.html",
+          "type": "article",
+          "summary": "Why monolith-first remains the default and what extraction actually costs."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "A Laravel application with read/write connections configured writes a user's profile update to the primary database. On the very next request the user still sees the old profile, and only seconds later sees the new value. What is happening, and what is the idiomatic Laravel remedy?",
+      "options": [
+        "The replica connection is broken, so the app silently falls back to an outdated SQLite copy on each node.",
+        "The read hit a replica that had not yet applied the write (replication lag). Route reads that must see the user's own writes to the primary, set sticky => true in the read/write DB config, and monitor replica lag.",
+        "Laravel randomly distributes every query including writes across nodes; you must add ->onWriteConnection(true) to every query.",
+        "This is purely a cache problem; call Cache::flush() at the end of every request."
+      ],
+      "correct": [1],
+      "explanation": "What you observe is replication lag. With a read/write block in config/database.php, Laravel sends writes to the primary and SELECTs to the configured replica host, which is exactly what you want for read-heavy load - but replication is asynchronous, so a read that arrives before the replica applies the change returns stale data. For read-your-own-writes flows (profile updates, order confirmation pages) the idiomatic remedies are: set sticky => true inside the read/write configuration block, which makes Laravel keep a request that performed a write on the primary for the remainder of that same request; and in recent Laravel versions, force a single critical query onto the primary with DB::readWriteConnection()->select(...). Sticky only covers the same request cycle - the user's next request is a new PHP process - so combine it with writing the freshest value through the cache layer after a write, or accept eventual visibility for non-critical reads. Monitor replica lag continuously (seconds_behind_primary in MySQL): a lagging replica serves stale data while pretending to spread load, and during a write-heavy peak lag is usually the first thing to explode. Doctrine/Symfony has the same model with primary/replica connections, and the mental rule is identical: replica reads are stale by design, so decide per feature which reads must see the user's own write and pin those to the primary.",
+      "difficulty": "medium",
+      "tags": ["database", "read-replicas", "mysql", "sticky"],
+      "resources": [
+        {
+          "title": "Laravel Database: Read & Write Connections",
+          "url": "https://laravel.com/docs/12.x/database#read-and-write-connections",
+          "type": "docs",
+          "summary": "Configuring read replicas, the sticky flag and how Laravel routes reads and writes."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "Scenario: your team was getting random logouts with two Laravel servers and file-backed sessions. An ops engineer fixes it by enabling sticky sessions on the load balancer so each user is always routed to the same server. Explain why this appears to fix the problem, why sticky sessions are not a durable architecture for a Laravel application at peak traffic, and what the correct long-term design is.",
+      "options": [],
+      "correct": [],
+      "explanation": "Model answer. Sticky sessions (session affinity) make the load balancer route every request from the same client to the same backend node, so the file-backed session keeps being found - which is why the symptom disappears. But it is a band-aid that makes your architecture stateful per node, and it bites at peak traffic in four ways. (1) No redundancy: if a node dies, is restarted, or is drained during a rolling deploy, every user pinned to it loses their session and appears logged out. (2) Skew: affinity is usually a hash of the client IP, so offices and NAT users pile onto one node while others sit idle; autoscaling in or out during a spike reshuffles affinity and can silently drop sessions. (3) You cannot truly scale: adding a node only helps users newly pinned to it, and removing one evicts its users. (4) Load-balancing algorithms that assume stateless backends - least-connections, weighted round-robin - no longer apply cleanly. The correct long-term design is stateless servers plus shared state: store sessions in Redis (config/session.php, driver => redis) in Laravel, or use the redis session handler or stateless signed/opaque tokens in Symfony. Then any request can hit any node, nodes scale in and out freely, deploys drain without user-visible logouts, and the load balancer does plain round-robin or least-connections. Sticky sessions are acceptable only as a short-term migration bridge - for example while centralizing an existing file-based session store - and should be tracked as technical debt with a removal plan.",
+      "difficulty": "medium",
+      "tags": ["load-balancing", "sticky-sessions", "statelessness", "sessions"],
+      "resources": [
+        {
+          "title": "NGINX HTTP Load Balancing",
+          "url": "https://docs.nginx.com/nginx/admin-guide/load-balancer/http-load-balancer/",
+          "type": "docs",
+          "summary": "Load-balancing methods including ip-hash affinity and least-connections."
+        },
+        {
+          "title": "Laravel Session Documentation",
+          "url": "https://laravel.com/docs/12.x/session",
+          "type": "docs",
+          "summary": "Moving sessions to Redis so backends can stay stateless."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "An endpoint that lists 50 blog posts with their tags and authors was fast during development. At peak load the database spikes to 100% CPU and the query log shows the same few SELECT statements for tags and authors executed hundreds of times within a single request. What is happening, and what is the senior fix?",
+      "options": [
+        "The query cache is cold; run php artisan config:cache and opcache_reset().",
+        "This is the N+1 problem: relations are lazy-loaded per post in a loop, producing 1 + N queries per request. Eager-load them once with with(['tags', 'author']).",
+        "The load balancer is round-robining reads to a lagging replica; pin every query to the primary.",
+        "MySQL cannot handle JOINs at this size; you must move the posts table to MongoDB."
+      ],
+      "correct": [1],
+      "explanation": "This is the classic N+1 query problem caused by lazy loading. Eloquent first runs one query for the 50 posts, then inside the rendering loop lazy-loads each post's tags and author, issuing another query per post - roughly 1 + 2N queries for one page of 50 posts. At a few requests per second that is invisible; at peak it compounds to thousands of queries per second, saturating database CPU, exhausting the connection pool and taking down endpoints that were innocent. The fix is eager loading: Post::with(['tags', 'author'])->paginate(50) collapses it to a handful of queries. In Symfony/Doctrine the equivalents are join fetches or eager/batch hydration. Senior extras worth stating: prevent recurrence by calling Model::preventLazyLoading() in a service provider so accidental lazy loads throw during development instead of silently shipping to production; add indexes for every WHERE, JOIN and ORDER BY the hot queries use; and track queries-per-request in your logs so regressions are caught in review. The wider lesson under the database-as-bottleneck theme: under concurrency even small queries compound, so first reduce query count (eager loading, caching), then reduce query cost (indexes), then spread load (replicas and pooling). N+1 elimination is the cheapest 10x database-load reduction you will ever make.",
+      "difficulty": "medium",
+      "tags": ["database", "n-plus-1", "eloquent", "performance"],
+      "resources": [
+        {
+          "title": "Laravel Eloquent Relationships: Preventing Lazy Loading",
+          "url": "https://laravel.com/docs/12.x/eloquent-relationships#preventing-lazy-loading",
+          "type": "docs",
+          "summary": "Eager loading with with() and preventing accidental lazy loading in development."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "During a flash sale, your checkout endpoint must, for every order: persist the order, send a confirmation email, call a loyalty API, and regenerate caches. Doing all of this synchronously keeps the HTTP request open and multiplies database and API load several times per order, so the application falls over. What is the canonical Laravel mechanism to decouple and protect the request path, and what happens if the spike exceeds capacity?",
+      "options": [
+        "Serialize orders with SELECT ... FOR UPDATE on every table so the database never sees concurrent work.",
+        "Dispatch the secondary work as queued jobs processed by workers: requests return fast, and if demand exceeds worker capacity the queue backlog grows - nothing is lost and the burst is absorbed instead of melting the database.",
+        "Raise php-fpm's pm.max_children until the spike passes; queues are unnecessary for synchronous PHP.",
+        "Run the extra work asynchronously with usleep() and file_put_contents() based retries."
+      ],
+      "correct": [1],
+      "explanation": "Queues exist precisely to decouple the fast, critical request path from slow or secondary work. Instead of the HTTP request waiting on SMTP, the loyalty API and cache rebuilds, you dispatch jobs and return the response immediately. In Laravel: make job classes implement ShouldQueue and dispatch them (dispatch(new SendOrderConfirmation($order))), set QUEUE_CONNECTION=redis, and run workers via php artisan queue:work or Horizon. Workers pull jobs at a sustainable rate, so the burst is absorbed as a backlog rather than converted into simultaneous load - that backlog is the backpressure mechanism. Requests stay fast, no work is lost, and if the spike exceeds worker capacity the queue grows instead of the database collapsing; you then scale workers, put critical jobs on a high-priority queue (orders) ahead of low-priority ones (emails), and watch Horizon for backlog growth and wait time. In Symfony the equivalent is Messenger with an async transport and messenger:consume workers, with a retry strategy. Two traps worth naming: QUEUE_CONNECTION=sync in production - the sync driver runs jobs inline, which is the same as having no queue at all - and unbounded synchronous retries, which re-enter the request path; instead configure retry counts and backoff so failures are handled by workers.",
+      "difficulty": "medium",
+      "tags": ["queues", "backpressure", "redis", "horizon"],
+      "resources": [
+        {
+          "title": "Laravel Queues Documentation",
+          "url": "https://laravel.com/docs/12.x/queues",
+          "type": "docs",
+          "summary": "Jobs, Redis connections, retries and backoff for decoupling heavy work."
+        },
+        {
+          "title": "Laravel Horizon Documentation",
+          "url": "https://laravel.com/docs/12.x/horizon",
+          "type": "docs",
+          "summary": "Queue dashboard showing backlog, wait time and failure rates under load."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "Scenario/design: an established Laravel e-commerce monolith handles a steady 500 requests per second with two application servers and one MySQL primary with a single replica. Marketing announces a 30-minute flash sale that will push traffic to roughly 10x. Your manager asks for a plan. Give your ordered, pragmatic approach: where do you look first, what do you add, and how would you specifically handle autoscaling for a short, predictable peak with known start and end times?",
+      "options": [],
+      "correct": [],
+      "explanation": "Model answer. A strong senior answer is ordered and defends where it starts: measure before you spend. (1) Profile the current system: p99 latency, the ten slowest endpoints, database CPU and the slow-query log, current replica lag and queue backlog. Most flash-sale collapses are two or three hot queries or one blocking integration, not a shortage of servers. (2) Cut work per request, the cheapest lever: run php artisan optimize (config, route, view caches) and enable opcache; cache hot reads aggressively with Cache::remember against Redis (product pages, stock counts); enable HTTP/edge caching via a CDN for anonymous catalog pages; eager-load to kill N+1 problems; index the hot queries. (3) Decouple the write path: the request must only persist the order and acknowledge - emails, receipts, inventory decrements and loyalty calls go to Redis queues with enough workers under Horizon. Spread read traffic to replicas with sticky reads where staleness is tolerable. (4) Capacity for a predictable peak: the web tier is stateless, so scale it out before the event and let autoscaling handle overflow. The autoscaling subtlety interviewers want: metric-based autoscaling lags - launching and warming a node takes minutes - so for a peak with a known start you pre-scale ahead of T-0 using time-based or manual scaling, then let CPU- or queue-based rules only add overflow capacity, and afterwards configure scale-in carefully so you do not shed capacity mid-tail. Load-test at the expected 10x (k6 or similar) before the event, especially checkout. (5) Protect the edges: circuit breaker and timeouts on the payment provider, stale-cache fallback if the database degrades, and idempotency on order creation so retried clicks cannot double-charge. Close by stating what you would not do: buying a bigger database before measuring, or extracting microservices to prepare for a traffic event.",
+      "difficulty": "medium",
+      "tags": ["design", "autoscaling", "peak-traffic", "caching", "queues"],
+      "resources": [
+        {
+          "title": "Amazon EC2 Auto Scaling - What is Auto Scaling?",
+          "url": "https://docs.aws.amazon.com/autoscaling/ec2/userguide/what-is-amazon-ec2-auto-scaling.html",
+          "type": "docs",
+          "summary": "Time-based versus metric-based scaling and the lag of launching new capacity."
+        },
+        {
+          "title": "System Design Primer",
+          "url": "https://github.com/donnemartin/system-design-primer",
+          "type": "docs",
+          "summary": "Broad reference for capacity planning, caching and replication levers."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "You run a Laravel application on PostgreSQL behind PgBouncer. Under load, developers start seeing sporadic errors such as prepared statement already exists or prepared statement does not exist, and LISTEN/NOTIFY based cache invalidation silently stops working. What is the root cause?",
+      "options": [
+        "PgBouncer is corrupting data under concurrency; you must upgrade PostgreSQL to a newer major version.",
+        "PgBouncer's transaction pooling reassigns one physical server connection between clients at transaction boundaries. Session-level state - prepared statements, advisory locks, LISTEN/NOTIFY, temp tables - leaks between or vanishes from reassigned connections, so it must be avoided or those connections must run in session pooling mode.",
+        "Doctrine and Eloquent each require their own dedicated connection pool per table, which PgBouncer cannot provide.",
+        "The errors are caused by PHP's garbage collector closing sockets in the middle of queries."
+      ],
+      "correct": [1],
+      "explanation": "Under peak load with many php-fpm workers, every PDO/Doctrine connection is a real TCP socket plus a backend process on PostgreSQL, and the default max_connections (often 100) gets exhausted - the classic remaining connection slots are reserved errors. A pooler such as PgBouncer multiplexes thousands of client connections onto a handful of server connections, so the database stops spending capacity on connection setup and stops rejecting clients. The gotcha is the pooling mode. In transaction pooling, PgBouncer lends a client a physical server connection only for the duration of one transaction, and a different client may receive that same connection afterwards. Anything that lives at session scope on the server therefore breaks: server-side prepared statements reused through a handle (producing prepared statement already exists or does not exist once the underlying connection changed), advisory locks, LISTEN/NOTIFY (which is why cache invalidation listeners silently die), temp tables and SET session parameters. That matches the symptom pattern: random failures that only appear under real load. The remedies: run session pooling mode for the traffic that genuinely needs session state (or a dedicated small pool), avoid session-level features in pooled code paths, and make sure the ORM does not keep persistent prepared statements - Laravel's PDO options such as ATTR_EMULATE_PREPARES and Doctrine configuration both matter here. The broader point for the database-bottleneck theme: connection pooling is the last line of defense for the database - reduce query count and cost first, then pool the connections.",
+      "difficulty": "hard",
+      "tags": ["database", "connection-pooling", "pgbouncer", "postgresql"],
+      "resources": [
+        {
+          "title": "PgBouncer Usage Documentation",
+          "url": "https://www.pgbouncer.org/usage.html",
+          "type": "docs",
+          "summary": "Session versus transaction pooling modes and their restrictions on session-level features."
+        },
+        {
+          "title": "Laravel Database Configuration",
+          "url": "https://laravel.com/docs/12.x/database#configuration",
+          "type": "docs",
+          "summary": "Connection configuration and PDO options relevant when placing Laravel behind a pooler."
+        }
+      ]
+    },
+    {
+      "type": "multi",
+      "prompt": "Your Laravel checkout calls a downstream payment provider whose latency has spiked to 5 seconds, and your own MySQL has started queueing queries. Which of the following practices constitute proper graceful degradation that protects your whole system? Select all that apply.",
+      "options": [
+        "Wrap the payment call in a circuit breaker so that while the provider is failing, requests fail fast locally (open circuit) instead of every request waiting 5 seconds and occupying a php-fpm worker and a database connection.",
+        "Retry the failing payment request synchronously up to 20 times inside the same HTTP call so the user eventually succeeds.",
+        "Serve cached fallbacks for degraded pieces (stale product and cart data) and clearly mark the checkout as degraded while the payment service is unavailable.",
+        "Move the provider call behind a queue with retries and backoff, letting the API acknowledge quickly where the flow allows it instead of blocking.",
+        "Raise PHP execution timeouts to 300 seconds so that slow requests always complete instead of timing out."
+      ],
+      "correct": [0, 2, 3],
+      "explanation": "Graceful degradation means the system keeps serving users with reduced but correct function when a dependency degrades, instead of collapsing in a cascade. The three correct practices: a circuit breaker around the flaky provider, with Fowler's states closed (passing), open (failing fast without calling) and half-open (probing with limited traffic), so that when the provider is sick, requests fail in milliseconds rather than each request occupying a php-fpm worker for the full timeout and holding a database connection - thread and connection exhaustion is how one slow dependency takes down an entire application. Cached fallbacks and degraded UI states: serve the last good product or cart data (stale-while-revalidate) while telling the user payment is temporarily unavailable. And moving non-interactive provider work behind queues with retry and backoff so the API acknowledges quickly instead of blocking. The wrong options are classic failure amplifiers: retrying synchronously 20 times multiplies load and creates retry storms (the thundering herd) while blocking workers, and raising timeouts to 300 seconds converts a slow dependency into guaranteed worker exhaustion. Laravel specifics: Http::timeout(3)->retry(3, 100) with exponential backoff and jitter; circuit breakers are not built into the framework, so implement a small Redis-based one (atomic failure counters over a window tripping a cache flag) or use a package; configure queue workers with max attempts and backoff; and always set timeouts plus idempotency keys so retried payments cannot double-charge. Symfony equivalents: HttpClient retry middleware and Messenger retry strategies.",
+      "difficulty": "hard",
+      "tags": ["circuit-breaker", "graceful-degradation", "resilience", "timeouts"],
+      "resources": [
+        {
+          "title": "CircuitBreaker - Martin Fowler",
+          "url": "https://martinfowler.com/bliki/CircuitBreaker.html",
+          "type": "article",
+          "summary": "Closed, open and half-open breaker states for failing fast against degraded dependencies."
+        },
+        {
+          "title": "Laravel HTTP Client Documentation",
+          "url": "https://laravel.com/docs/12.x/http-client",
+          "type": "docs",
+          "summary": "Timeouts, retries and backoff on outgoing HTTP calls."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "Design critique: the CTO of your Laravel e-commerce company wants checkout extracted into its own microservice so it can scale independently for the flash sale. The current pain points are: the checkout code is well structured, but the shared MySQL primary is the bottleneck, and a team of nine squabbles over one deploy pipeline. Evaluate the proposal: will extracting checkout fix the stated problems? What are the real costs of splitting? What would you recommend instead, and if extraction were still justified later, how would you sequence it?",
+      "options": [],
+      "correct": [],
+      "explanation": "Model answer. This is a trap question: the CTO is solving a traffic problem by changing code topology, and the two are not connected. If the checkout code is clean and the real bottleneck is the shared MySQL primary, extracting checkout into a microservice that reads and writes the same database changes nothing about the bottleneck - there is still one writer, the same locks, the same connection ceiling - and you have added a network hop, serialization overhead and a second deployable for free. Database pressure is relieved with caching, read replicas, queues, indexing and pooling, not with service boundaries. Microservices earn their cost only when the driver is organizational or genuinely per-service: a team large enough that ownership conflicts and release coupling hurt (Conway's law - the architecture mirrors the communication structure), a part needing a different scaling profile, runtime or regulatory isolation, or an independent release cadence. The costs to state explicitly: a checkout currently relying on one ACID transaction cannot span services without sagas and eventual consistency; joins across services must be re-architected with data ownership and possibly CQRS read models; debugging requires tracing across hops; and operations burden multiplies (per-service deploys, dashboards, runbooks). A nine-person team running several services will feel that overhead quickly. The recommendation: stay a modular monolith; fix the database bottleneck (indexes, caching, queues, replicas, pooling); and fix the pipeline squabbling with monorepo conventions, module ownership and feature flags - extraction will not repair a pipeline problem. If a genuine driver emerges later, extract safely: pick a service with a hard boundary and clear API, give it its own tables and data ownership (never share the database), move side effects to async events, follow the strangler pattern, and start with a read-heavy or integration-heavy slice rather than the write-critical checkout core.",
+      "difficulty": "hard",
+      "tags": ["microservices", "architecture", "design", "database-bottleneck"],
+      "resources": [
+        {
+          "title": "Microservice Trade-Offs - Martin Fowler",
+          "url": "https://martinfowler.com/articles/microservice-trade-offs.html",
+          "type": "article",
+          "summary": "Real drivers for splitting services versus the distributed-systems costs they impose."
+        },
+        {
+          "title": "Microservices - Martin Fowler",
+          "url": "https://martinfowler.com/articles/microservices.html",
+          "type": "article",
+          "summary": "Organizational forces behind the microservice style and the monolith-first default."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "Laravel Octane serves requests from long-running workers (Swoole, RoadRunner or FrankenPHP) instead of booting the framework for every request. After adopting Octane, a subtle class of bugs appears only under high traffic: values that should be fresh per request are sometimes stale, or data is shared between users. What is the root cause, and what is the correct rule?",
+      "options": [
+        "Octane reuses php-fpm pools, so sessions collide across workers; set the session driver back to file.",
+        "Because the framework and your code now persist in memory between requests, anything stored in static properties, mutable singletons or long-lived container instances survives across requests and can leak state between users. Request-scoped data must live inside the request lifecycle, and workers must be recycled after deploys with php artisan octane:reload.",
+        "Octane disables opcache, so every request recompiles the framework and all state is lost.",
+        "Octane only works with Redis; switching the session driver to the database fixes the leak."
+      ],
+      "correct": [1],
+      "explanation": "Octane boots the application once inside long-running workers and serves many requests from that same process, instead of the php-fpm model where each request boots the framework and dies with it. That difference is the source of the bug class: in classic FPM, per-request state dies with the process, so careless code gets away with storing current-user or request data in static properties or in container singletons. Under Octane the container and your classes persist between requests, so a static property written during request A is still there for request B - user A's data can leak into user B's response, and anything baked at boot goes stale until workers are recycled. The rule: never store request- or user-scoped data in statics or long-lived singletons; keep it in the request lifecycle (request object, session, cache). Framework care: after deploying new code or changing configuration that is baked in at boot, run php artisan octane:reload so workers restart cleanly - this is also why a deploy can appear to do nothing until you reload. Related tools are complements, not substitutes: opcache stores compiled bytecode, and php artisan optimize caches config, routes and views so each worker's boot is cheap. Mentioning memory leaks in long-running workers and testing under concurrency shows you have actually run Octane in production.",
+      "difficulty": "hard",
+      "tags": ["octane", "state-management", "opcache", "laravel"],
+      "resources": [
+        {
+          "title": "Laravel Octane Documentation",
+          "url": "https://laravel.com/docs/12.x/octane",
+          "type": "docs",
+          "summary": "Long-running workers, request lifecycle rules and octane:reload after deploys."
+        },
+        {
+          "title": "Laravel Deployment Documentation",
+          "url": "https://laravel.com/docs/12.x/deployment",
+          "type": "docs",
+          "summary": "php artisan optimize, opcache and cache-clearing steps in the deploy cycle."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "At 02:00 a traffic spike begins and checkout errors climb. You have three raw signals: millions of unstructured log lines, an aggregate metrics dashboard, and individual request traces. The team starts grepping logs for the word error. Why does log grepping scale poorly here, and what is the disciplined order of attack during a load incident?",
+      "options": [
+        "Logs are the wrong tool for incident triage at volume because they are high-volume and low-signal, and without a shared identifier you cannot correlate one logical request across the app, Redis, queue and database. Start from aggregated metrics, open a representative failing trace, then use its request ID to pull the few relevant logs.",
+        "Metrics and traces only add overhead; the cause is always in the first log line you grep, so keep grepping.",
+        "Switch all logging to var_dump output so nothing is lost, then search the captured stream.",
+        "Restart every server immediately; logs only matter after the outage is over."
+      ],
+      "correct": [0],
+      "explanation": "Log grepping collapses because logs are the wrong first signal for triage at scale: volume explodes exactly when you are under stress (flooding storage and cost), individual lines carry no causality, and without a shared identifier you cannot tell which lines belong to the same logical request as it hops through the application, Redis, the queue and the database. The disciplined order is metrics, then traces, then logs. Start from aggregated metrics - error rate, p99 latency crossing your SLO, queue backlog, database connections and replica lag - because they tell you when the incident started and which subsystem is saturated (the RED and USE models: rate, errors, duration; utilization, saturation, errors). Then open one representative failing or slow trace to see the actual request path and the single hop that blows up. Only then use that trace's request or correlation ID to pull the few relevant log lines. Making this possible is an engineering task, and that is the real interview answer: propagate a correlation ID - a middleware that generates a request ID and adds it to every log context (Laravel: Log::withContext(['request_id' => $id]), or a monolog processor in Symfony) - carry it into outgoing calls, and forward it to queued jobs so async work stays traceable to the HTTP request that spawned it. Laravel-specific assets: Horizon's dashboard exposes queue backlog and wait time; enable the slow-query log; and sample traces at high volume while keeping 100% of errors. Peter Bourgon's Metrics, tracing, and logging essay is the canonical framing of these three pillars.",
+      "difficulty": "hard",
+      "tags": ["observability", "metrics", "tracing", "logging", "incident-response"],
+      "resources": [
+        {
+          "title": "Metrics, tracing, and logging - Peter Bourgon",
+          "url": "https://peter.bourgon.org/blog/2017/02/21/metrics-tracing-and-logging.html",
+          "type": "article",
+          "summary": "The three observability pillars and how they complement each other during incidents."
+        },
+        {
+          "title": "Laravel Logging Documentation",
+          "url": "https://laravel.com/docs/12.x/logging",
+          "type": "docs",
+          "summary": "Log channels, contextual data and withContext for correlation IDs."
+        }
+      ]
+    }
+  ]
+}

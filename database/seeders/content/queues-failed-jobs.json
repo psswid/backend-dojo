@@ -1,0 +1,365 @@
+{
+  "topic": {
+    "slug": "queues-failed-jobs",
+    "name": "Queues & Failed Jobs",
+    "description": "Background processing with Laravel queues/Symfony Messenger: workers, retries, failed jobs, batching, and reliability under load.",
+    "color": "#10b981",
+    "icon": "📨",
+    "sort_order": 4
+  },
+  "resources": [
+    {
+      "title": "Laravel Queues Documentation",
+      "url": "https://laravel.com/docs/12.x/queues",
+      "type": "docs",
+      "summary": "Canonical reference for connections, dispatch, workers, retries, timeouts, delayed dispatch, job chaining, batching, job middleware and failed jobs."
+    },
+    {
+      "title": "Laravel Horizon Documentation",
+      "url": "https://laravel.com/docs/12.x/horizon",
+      "type": "docs",
+      "summary": "Redis-based queue dashboard: supervisors, auto-balancing, metrics (throughput, runtime, failed jobs) and notifications."
+    },
+    {
+      "title": "Symfony Messenger Documentation",
+      "url": "https://symfony.com/doc/current/messenger.html",
+      "type": "docs",
+      "summary": "Canonical Symfony docs: transports, routing messages to async, the retry strategy and the failure (dead-letter) transport."
+    },
+    {
+      "title": "Laravel Cache — Atomic Locks",
+      "url": "https://laravel.com/docs/12.x/cache",
+      "type": "docs",
+      "summary": "Atomic locks underpin WithoutOverlapping and RateLimited job middleware and are the standard building block for cross-worker coordination."
+    },
+    {
+      "title": "Laravel Redis Documentation",
+      "url": "https://laravel.com/docs/12.x/redis",
+      "type": "docs",
+      "summary": "Redis client, persistence concerns and lock support that back the redis queue driver and Horizon."
+    },
+    {
+      "title": "AWS SQS Visibility Timeout",
+      "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html",
+      "type": "docs",
+      "summary": "Explains why SQS re-delivers in-flight messages, the root cause of at-least-once duplicates and how visibility timeouts interact with workers."
+    }
+  ],
+  "questions": [
+    {
+      "type": "single",
+      "prompt": "An endpoint accepts a CSV import that triggers per-row processing and email notifications to end users. Which statement best captures the core reason for handing this work to a queue instead of executing it inside the HTTP request?",
+      "options": [
+        "Queues make the database queries inside the import run faster by caching their results.",
+        "Queues return the HTTP response almost immediately while a worker processes the import asynchronously, decoupling request latency from job duration and making failures retryable without the user waiting on the connection.",
+        "Queues guarantee the job can never fail, so no error handling is needed.",
+        "Queues are only worth using when the application runs on multiple servers."
+      ],
+      "correct": [1],
+      "explanation": "The two architectural wins are latency and decoupling. A web request should do the minimum work and return fast; users and proxies time out, and PHP-FPM or Octane workers are tied up for the whole duration of synchronous heavy work. Moving the import to a queue lets the controller dispatch a job and respond, while a separate worker process (php artisan queue:work, or Horizon) consumes it later, possibly on a different machine and at a different scale than the web tier. It also decouples producers from consumers: the queue is a buffer that absorbs bursts, so the web tier never blocks on slow downstream systems, and a failed job can be retried (queue:retry) without the user ever seeing an error page. The trade-off is eventual consistency: because the response returns before the work is done, you need a status mechanism (job id, batch progress, webhook) so the UI can reflect completion. In Symfony Messenger the same idea is expressed by routing a message class to the async transport instead of the sync transport, and handlers run under messenger:consume. Option B is the correct summary; queues never eliminate failures, they move and manage them.",
+      "difficulty": "easy",
+      "tags": ["queues", "architecture"],
+      "resources": [
+        {
+          "title": "Laravel Queues Documentation",
+          "url": "https://laravel.com/docs/12.x/queues",
+          "type": "docs",
+          "summary": "Why and when to queue work, dispatch semantics and worker execution."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "In Laravel, a job class that implements the empty ShouldQueue contract will:",
+      "options": [
+        "throw a runtime exception unless it is dispatched on the redis connection.",
+        "be handed to the configured queue connection and executed later by a worker, whereas the same dispatch without ShouldQueue (or with the sync driver) runs the job synchronously in the current process.",
+        "be automatically retried until it succeeds no matter what $tries says.",
+        "cause every failed instance to be written to the failed_jobs table on the very first exception."
+      ],
+      "correct": [1],
+      "explanation": "ShouldQueue is a marker interface with no methods; its presence tells the dispatcher to push the job onto the queue connection from config/queue.php (default QUEUE_CONNECTION) instead of invoking handle() inline. The same pattern applies to Mailables, Notifications, broadcast events and event listeners that implement ShouldQueue: dispatch stays identical, only the execution strategy changes. With QUEUE_CONNECTION=sync every job executes immediately in the calling process, which is why tests often swap the driver or use Queue::fake() and assertPushed(). It is important to know that ShouldQueue does not imply retries or failure persistence: a job is retried only if it fails before exhausting $tries/$backoff/retryUntil, and it lands in failed_jobs only after attempts are exhausted. In Symfony the equivalent decision lives in Messenger routing config, where a message class is mapped to the async transport or to the sync transport; the message itself carries no marker, and consumption happens via messenger:consume.",
+      "difficulty": "easy",
+      "tags": ["queues", "shouldqueue"],
+      "resources": [
+        {
+          "title": "Laravel Queues Documentation",
+          "url": "https://laravel.com/docs/12.x/queues",
+          "type": "docs",
+          "summary": "ShouldQueue contract, dispatchable jobs and sync driver behaviour."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "You are choosing a queue driver for a Laravel application. Which of the following statements is accurate?",
+      "options": [
+        "The database driver stores jobs in a table, needs no extra infrastructure, but polls for work and is generally a poor fit for very high throughput or sub-second latency.",
+        "The sync driver is the recommended production default and persists jobs across worker restarts.",
+        "The redis driver is slower than database because it serializes every job to disk before processing.",
+        "The sqs driver provides exactly-once delivery out of the box, so retry logic is unnecessary."
+      ],
+      "correct": [0],
+      "explanation": "Driver choice is a classic senior trade-off question. database: zero extra services, jobs survive restarts in a real table, and modern Laravel reserves rows atomically (SELECT ... FOR UPDATE SKIP LOCKED), but workers must poll, which wastes cycles and adds latency; it is fine for modest volume and for teams that do not want to operate Redis. redis: very fast, atomic list operations, blocking pops (so workers sleep instead of polling) and it is the required foundation for Horizon; but the queue lives in Redis memory, so without AOF/RDB persistence a Redis restart can lose pending jobs, and you now operate another service. sqs: fully managed, HTTP-based, scales without you managing workers' broker, but delivery is at-least-once (duplicates possible), you pay per request, and you must tune the visibility timeout and optionally a dead-letter queue. The sync driver runs jobs inline and is for development and tests, never production throughput. Choose based on throughput, operational budget and how much duplicate-execution risk your side effects can tolerate.",
+      "difficulty": "easy",
+      "tags": ["queues", "queue drivers", "redis", "sqs"],
+      "resources": [
+        {
+          "title": "Laravel Queues Documentation",
+          "url": "https://laravel.com/docs/12.x/queues",
+          "type": "docs",
+          "summary": "Driver prerequisites and trade-offs for database, redis and sqs connections."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "Which of the following dispatches a Laravel job so that it first runs roughly 15 minutes after dispatch?",
+      "options": [
+        "ProcessReport::dispatch()->delay(now()->addMinutes(15));",
+        "ProcessReport::dispatch(15);",
+        "delay(15)->dispatch(ProcessReport::class);",
+        "ProcessReport::delay(now()->addMinutes(15))->dispatch();"
+      ],
+      "correct": [0],
+      "explanation": "dispatch() returns a PendingDispatch whose delay() accepts either a DateTimeInterface or a number of seconds, so ProcessReport::dispatch()->delay(now()->addMinutes(15)) or ->delay(900) are the canonical forms. Delayed jobs are stored per driver (the database driver sets an available_at column, redis uses a sorted set keyed by score) and are not delivered to a worker until that time passes; they are useful for reminders, cooling-down windows after signup, and spreading load. In Symfony Messenger, delayed dispatch is expressed either by adding a DelayStamp to the envelope or by configuring the transport with a delay option, then dispatching the message normally. Watch out: delay() must be called on the pending dispatch object, so option D is invalid because delay() is not a static factory on the job class, and option B just passes an argument to the constructor.",
+      "difficulty": "easy",
+      "tags": ["queues", "delayed jobs"],
+      "resources": [
+        {
+          "title": "Laravel Queues Documentation",
+          "url": "https://laravel.com/docs/12.x/queues",
+          "type": "docs",
+          "summary": "Delayed dispatch via delay() with DateTimeInterface or seconds."
+        }
+      ]
+    },
+    {
+      "type": "multi",
+      "prompt": "A job exhausts all of its allowed attempts and Laravel marks it as failed. Which of the following statements about failed-job handling are true? (Select all that apply.)",
+      "options": [
+        "Laravel records a row in the failed_jobs table containing the job payload, the connection and queue names, the exception with its message and stack trace, and a failed_at timestamp.",
+        "By default the failed job is deleted permanently and can never be retried.",
+        "You can define a failed(Throwable $e) method on the job class, or listen to the JobFailed event, to run cleanup or alerting exactly when a job fails.",
+        "The artisan commands queue:failed, queue:retry, queue:forget and queue:flush let you inspect, re-dispatch, delete or purge failed jobs.",
+        "Failed jobs are automatically deleted after exactly 24 hours with no configuration needed."
+      ],
+      "correct": [0, 2, 3],
+      "explanation": "When attempts run out, Laravel writes the job into the failed_jobs table (columns: uuid, connection, queue, payload, exception, failed_at) so nothing is lost and you can replay it later. Each job may define public function failed(Throwable $e): Laravel calls it after the final attempt so you can roll back a flag, notify Slack or log context that handle() no longer has; alternatively the JobFailed event or the legacy Queue::failing hook covers jobs without their own method. Operational workflow: queue:failed lists failures, queue:retry {id|all} pushes them back onto the queue (optionally with --queue), queue:forget removes one and queue:flush empties the table. Nothing is auto-deleted: if you want pruning you schedule queue:prune-failed --hours=24. Symfony Messenger models the same idea differently: a failure transport (dead-letter) configured under framework.messenger.failure_transport receives messages whose retries are exhausted, and messenger:failed:show / messenger:failed:retry / messenger:failed:remove are the equivalents of the Laravel artisan commands.",
+      "difficulty": "medium",
+      "tags": ["queues", "failed jobs"],
+      "resources": [
+        {
+          "title": "Laravel Queues Documentation",
+          "url": "https://laravel.com/docs/12.x/queues",
+          "type": "docs",
+          "summary": "Failed-jobs table contents, the failed() hook, cleanup and pruning commands."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "A Laravel job declares public $tries = 5 and public $backoff = [10, 30, 60]. How many total attempts will the worker make, and with what waiting between them?",
+      "options": [
+        "5 attempts in total; the waits between attempts are 10, 30, 60 and then 60 seconds again, because when the backoff array runs out Laravel keeps reusing its last value.",
+        "An unlimited number of attempts; the backoff array only controls how long each retry waits.",
+        "Exactly 1 attempt, because the backoff array only applies inside the failed() method.",
+        "3 attempts, because the number of elements in the backoff array caps the number of retries."
+      ],
+      "correct": [0],
+      "explanation": "$tries is the hard cap on total attempts including the first run, so this job is executed up to 5 times. $backoff controls how long the job is released before the next attempt: after attempt 1 it waits 10s, after attempt 2 it waits 30s, after attempt 3 it waits 60s, and because the array is shorter than the remaining retries, Laravel repeats the final element (60s) before the last attempt. If it still throws after attempt 5 it is moved to failed_jobs. Two refinements matter at senior level: a backoff array gives a poor-man exponential curve, and for genuinely time-based jobs retryUntil() overrides $tries entirely, e.g. stop trying after an external import window closes (retryUntil() returning a past timestamp cancels further attempts and fails the job). Symfony Messenger expresses the same concern in transport config as retry_strategy: max_retries (default 3), delay (default 1000 ms) and multiplier (default 2), which doubles the delay on every retry — the built-in exponential backoff.",
+      "difficulty": "medium",
+      "tags": ["queues", "retries", "backoff"],
+      "resources": [
+        {
+          "title": "Laravel Queues Documentation",
+          "url": "https://laravel.com/docs/12.x/queues",
+          "type": "docs",
+          "summary": "Max job attempts, backoff values and retryUntil time-based retries."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "You give a job a $timeout of 120 seconds, but config/queue.php still uses the default retry_after of 90 for the redis connection. A legitimate run of this job takes about 110 seconds. What happens, and why is this configuration dangerous?",
+      "options": [
+        "Nothing unusual: the worker simply lets the job run until $timeout terminates it at 120 seconds, then marks it failed.",
+        "Another worker can pick the same job up again once retry_after (90s) passes while the first worker is still executing it, so the job runs twice concurrently and its side effects happen twice.",
+        "The job is immediately failed at 90 seconds and written to failed_jobs without being retried.",
+        "The queue worker restarts itself and clears the entire queue to protect the other jobs."
+      ],
+      "correct": [1],
+      "explanation": "This is one of the most common Laravel queue traps and the classic 'timeout vs retry_after' interview question. $timeout (queue:work --timeout or the job property) is how long the worker process lets a single job execute before it is terminated with a kill signal, e.g. via pcntl; it is enforced by the worker. retry_after, on the other hand, is a queue-connection safety valve: it is how long the queue considers a reserved but unreleased job stale, after which the job is made available again. If retry_after is smaller than the longest job runtime, the queue releases the job while worker A is still happily running it, worker B reserves it, and both execute the same job concurrently — duplicate emails, double charges, double inserts. The rule: retry_after must always be larger than the maximum timeout of any job on that connection (a worker that dies mid-job also relies on retry_after to eventually release its reservation). The same hazard exists in Messenger: the Redis transport's redeliver_timeout and the Doctrine transport's message redelivery settings play the role of retry_after, and SQS has its visibility timeout (see the SQS question in this set).",
+      "difficulty": "medium",
+      "tags": ["queues", "timeouts", "redis", "trap"],
+      "resources": [
+        {
+          "title": "Laravel Queues Documentation",
+          "url": "https://laravel.com/docs/12.x/queues",
+          "type": "docs",
+          "summary": "Timeout values vs retry_after semantics and worker termination."
+        }
+      ]
+    },
+    {
+      "type": "multi",
+      "prompt": "Which of the following statements about Laravel job chaining (Bus::chain) and job batching (Bus::batch) are true? (Select all that apply.)",
+      "options": [
+        "In a chain, jobs execute one after another in order, and when one job fails the remaining jobs in that chain are not run; you can attach a catch() callback to react to the failure.",
+        "Jobs in a batch may execute concurrently across workers, and the batch's then() callback fires once the whole batch has completed.",
+        "For a job to inspect or control its own batch from inside handle(), the job should use the Batchable trait, which exposes $this->batch() with methods such as progress() and cancel().",
+        "Calling dispatch() on a chain pushes every job onto the queue at once and Laravel reorders them by priority at runtime.",
+        "Both chaining and batching require the job_batches table migration; without it they silently fall back to synchronous execution."
+      ],
+      "correct": [0, 1, 2],
+      "explanation": "Chaining and batching solve opposite problems and seniors must keep them apart. Bus::chain([...]) guarantees sequential execution: job 2 starts only after job 1 finishes successfully, and a failure halts the chain (a catch() callback receives the failure), which is ideal for ordered multi-step workflows like create account, then provision, then notify. Bus::batch([...]) is for parallel fan-out with aggregate callbacks: jobs can run on many workers at once, Laravel tracks the batch in the job_batches table, then()/catch()/finally() fire on completion, failure, or regardless of outcome, and a job using the Batchable trait can query $this->batch()->progress() or cancel() the rest of the batch. Details worth stating precisely: dispatch() on a chain returns a PendingChain and jobs are queued one after another as each predecessor completes, so option D is false; only batching needs the job_batches table (created via php artisan queue:batches-table), whereas chaining needs no extra schema, so option E is false. Batch ids are string UUIDs that you can persist to correlate later via Bus::findBatch().",
+      "difficulty": "medium",
+      "tags": ["queues", "batching", "chaining"],
+      "resources": [
+        {
+          "title": "Laravel Queues Documentation",
+          "url": "https://laravel.com/docs/12.x/queues",
+          "type": "docs",
+          "summary": "Job chaining, job batching, the Batchable trait and the job_batches table."
+        }
+      ]
+    },
+    {
+      "type": "multi",
+      "prompt": "Which statements about Laravel job middleware for cross-job coordination are correct? (Select all that apply.)",
+      "options": [
+        "WithoutOverlapping prevents a job from running while another instance of it (optionally keyed by an id) is still executing; it works by acquiring an atomic lock from a lock-capable cache store such as Redis.",
+        "WithoutOverlapping can be tuned with ->releaseAfter() (how long to wait before trying again when another instance holds the lock) and ->expireAfter() (when the held lock expires), which prevents a short overlapping job from spin-retrying forever.",
+        "The RateLimited middleware, paired with a named rate limiter, throttles how frequently a job executes; a throttled job is released back to the queue with a delay instead of failing.",
+        "Job middleware is registered by returning middleware instances from a middleware() method on the job class, and it runs around handle(), with the power to skip, release or delete the job.",
+        "Attaching WithoutOverlapping to a job is enough to guarantee exactly-once side effects such as charging a credit card."
+      ],
+      "correct": [0, 1, 2, 3],
+      "explanation": "Job middleware lets you add cross-cutting behaviour without touching handle() logic. WithoutOverlapping acquires an atomic cache lock scoped to the job class plus an optional key (new WithoutOverlapping($user->id)), which is exactly the tool for 'never run the same user's report twice': if the lock is held, the middleware releases the job back to the queue instead of executing it; releaseAfter() inserts a pause before the retry and expireAfter() bounds how long a lock can be held, protecting you from a crashed instance that never released its lock. RateLimited throttles execution frequency against a named limiter defined with RateLimiter::for(), releasing the job with a delay when the window is exceeded. Both rely on cache drivers that support atomic locks (Redis, Memcached, DynamoDB and others); on a non-lock store the middleware cannot work as intended. The trap: middleware prevents overlapping execution and duplicate dispatch, but once a job has completed, a redelivery (visibility timeout expiry, network retry) can still run it again — so option E is false, and only idempotent side effects (unique keys, dedupe tables) give you effectively-once semantics.",
+      "difficulty": "medium",
+      "tags": ["queues", "middleware", "locks", "rate limiting"],
+      "resources": [
+        {
+          "title": "Laravel Queues Documentation",
+          "url": "https://laravel.com/docs/12.x/queues",
+          "type": "docs",
+          "summary": "Job middleware: WithoutOverlapping, RateLimited and ThrottlesExceptions."
+        },
+        {
+          "title": "Laravel Cache — Atomic Locks",
+          "url": "https://laravel.com/docs/12.x/cache",
+          "type": "docs",
+          "summary": "How atomic locks power job middleware and which drivers support them."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "A Redis-backed Laravel app running under Horizon processes an integration job that occasionally receives a malformed payload. In incidents the job (1) sometimes allocates so much memory that the worker process dies mid-run, and (2) sometimes loops internally for a long time before finally throwing. Operators observe the same job being executed over and over, and the failed_jobs table stays empty. Explain mechanically what happens in each of the two cases at the queue level, why attempts-based retry does not protect you here, and then design a concrete prevention and quarantine strategy covering timeouts, retry/backoff configuration, locks or state guards, monitoring and re-dispatch tooling.",
+      "options": [],
+      "correct": [],
+      "explanation": "Mechanics: when handle() throws a normal exception, the worker catches it, counts the attempt, applies $backoff and retries; once $tries (or retryUntil()) is exhausted, Laravel writes the job to failed_jobs and calls failed(). That path never runs when the worker process itself dies — an OOM kill or segfault gives Laravel no chance to record the attempt or execute failure hooks. Instead, the job stays in the reserved state until retry_after elapses, then the queue makes it visible again and a fresh worker picks it up, repeating the cycle. Result: a poison-pill job (one that kills workers or runs far beyond the worker timeout) is retried forever at the broker level while failed_jobs stays empty. A runaway loop is similar unless a timeout exists: without --timeout/$timeout the job never returns control, blocking one worker indefinitely. Strategy: (1) Bound execution — set $timeout on every external job so a runaway loop is killed by the worker and converted into a retryable failure instead of an eternal hang, and keep retry_after above the largest timeout; cap $tries and give a backoff array so genuinely failing jobs escalate to failed_jobs after a few attempts instead of hammering the API. (2) Validate and quarantine — reject malformed payloads before processing (a constructor or first-line guard that throws an Unrecoverable-style exception) and treat repeated failures of the same job as a signal to alert rather than auto-retry; for SQS the analogous quarantine is a dead-letter queue after maxReceiveCount. (3) Locks and state guards — WithoutOverlapping keyed by a business id prevents two concurrent copies from double-executing when redelivery happens, and a started_at heartbeat row or cache entry with TTL lets a watchdog detect a job that is processing far beyond its expected duration. (4) Memory — reduce per-job memory (chunked DB processing, unset large payloads), raise the worker memory limit deliberately, and let the process manager (supervisord/systemd) restart workers; Horizon adds --timeout and memory supervision plus a dashboard showing failed counts, throughput and runtimes. (5) Tooling — when the root cause is fixed, re-dispatch quarantined work with queue:retry {id} or from the Horizon failed-jobs screen rather than pushing it straight back into the live queue. Symfony Messenger's equivalent controls are the transport retry_strategy (max_retries, delay, multiplier), throwing UnrecoverableMessageHandlingException to skip retries for hopeless messages, and a failure_transport that dead-letters messages so messenger:failed:retry can replay them after the fix.",
+      "difficulty": "hard",
+      "tags": ["queues", "poison pill", "reliability", "horizon", "failed jobs"],
+      "resources": [
+        {
+          "title": "Laravel Horizon Documentation",
+          "url": "https://laravel.com/docs/12.x/horizon",
+          "type": "docs",
+          "summary": "Worker timeouts, memory supervision, dashboard metrics and failed-job notifications."
+        },
+        {
+          "title": "Laravel Queues Documentation",
+          "url": "https://laravel.com/docs/12.x/queues",
+          "type": "docs",
+          "summary": "retry_after release semantics, timeouts, failed() and queue:retry tooling."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "You are building an order service that sends a confirmation email and charges a payment provider when an order is placed, driven by a standard (non-FIFO) SQS queue in Laravel. The product owner demands exactly-once delivery because a double charge is unacceptable. Explain why exact exactly-once is not realistically achievable with this architecture, which delivery semantics real queues actually provide, and design the practical solution you would implement, including where Laravel features such as unique jobs and WithoutOverlapping do and do not help.",
+      "options": [],
+      "correct": [],
+      "explanation": "Semantics: standard SQS and Redis lists deliver at-least-once: a message can be delivered more than once whenever the consumer dies after performing its side effect but before deleting the message, when the visibility timeout expires while the job is still in flight, or when a transient failure triggers a retry. At-most-once (delete before processing) prevents duplicates but silently loses work when the consumer crashes. True exactly-once requires agreement between the queue, the worker and the payment provider (distributed transactions, consensus), which queues do not provide — SQS FIFO deduplication only collapses duplicates inside a 5-minute window and still does not make the downstream side effect atomic. The industry answer is effectively-once: at-least-once delivery plus an idempotent consumer, i.e. executing the same logical message twice has the same observable effect as once. Practical design: give each message a stable business key (order_id or a provider idempotency key) and store processed keys in a table with a UNIQUE constraint. In the handler, open a DB transaction, attempt to INSERT the dedupe marker (order_id, status, timestamps); a duplicate-key violation means this order was already handled, so commit nothing and return success; otherwise perform the charge and email and commit the transaction together. Because the marker insert and the state change are atomic in one transaction, a redelivery after a crash can never double-charge: either the transaction committed (the redelivery sees the marker and no-ops) or it rolled back (the redelivery re-executes the whole unit). Where Laravel features fit: ShouldBeUnique + $uniqueFor prevents two identical jobs from being queued at the same time, and WithoutOverlapping prevents concurrent execution of the same job, but both only narrow the window — neither makes a completed side effect idempotent against later redelivery, which is why the dedupe table is the load-bearing piece. Finally, accept a reconciliation loop for the residual case where the payment succeeded but the local transaction rolled back before commit: query the provider by order_id/idempotency key and complete or compensate, which is why payment APIs expose idempotency keys.",
+      "difficulty": "hard",
+      "tags": ["queues", "exactly-once", "idempotency", "sqs", "reliability"],
+      "resources": [
+        {
+          "title": "Laravel Queues Documentation",
+          "url": "https://laravel.com/docs/12.x/queues",
+          "type": "docs",
+          "summary": "Unique jobs and retry semantics relevant to duplicate suppression."
+        },
+        {
+          "title": "AWS SQS Visibility Timeout",
+          "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html",
+          "type": "docs",
+          "summary": "Why in-flight messages are redelivered, producing at-least-once semantics."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "You run a Laravel application with three logical job classes (notifications, media processing, and email) plus a nightly import that enqueues tens of thousands of jobs. Traffic spikes during the day and the team needs visibility into throughput, runtimes and failures. Design the production queue topology you would implement with Laravel Horizon: supervisor configuration (queues, process counts, balancing), per-queue tuning of tries/backoff/timeout, how workers are kept alive and updated across deployments, and which metrics and notifications you would rely on. Also state what you would change if the team standardized on Symfony Messenger instead.",
+      "options": [],
+      "correct": [],
+      "explanation": "Topology: run a single Horizon process (php artisan horizon) per host under supervisord or systemd with autorestart, with QUEUE_CONNECTION=redis. In config/horizon.php define an environment block per deployment (production, local). Group work into named queues (notifications, media, emails, imports) and give supervisors a weighted priority order: 'queue' => ['notifications', 'emails', 'media', 'imports'] means Horizon drains higher-priority queues first, so a notification backlog cannot starve email. Do not put the nightly import on the same queue as latency-sensitive email — isolate it on its own queue (or run a second supervisor for it) so a huge backlog does not delay everything else. Balancing: set balance => 'auto' with autoScalingStrategy => 'time' in production so Horizon continuously rebalances worker processes between queues based on recent wait times, bounded by minProcesses/maxProcesses and balanceMaxShift; use balance => false locally (one process). Per-supervisor or per-job tuning: notifications should be quick with short timeout and low tries (retry a couple of times, then fail), media jobs get a large timeout with retry_after above it, and backoff arrays spread retries; use WithoutOverlapping for per-user heavy jobs and RateLimited against provider APIs. Keeping workers alive and updated: Horizon itself is supervised so a crash restarts it, and after each deployment you run php artisan horizon:terminate (like queue:restart) so workers finish current jobs and respawn with the new code — do not kill -9 the process. Metrics and alerts: the Horizon dashboard shows jobs processed per minute (throughput), average runtime, failed-job counts and wait times per queue; route notifications with Horizon::routeMailNotificationsTo() or routeSlackNotificationsTo() for failed jobs and excessive wait thresholds so incidents page you before customers do. For Symfony Messenger the shape is different: you run N independent messenger:consume processes per transport (supervisord with numprocs), one transport per logical queue; the retry strategy is configured per transport in messenger.yaml; Doctrine transports dead-letter to a failure transport; and because Messenger ships no dashboard, you export queue depth and consumer metrics to Prometheus/Grafana or a similar stack instead of relying on Horizon's UI.",
+      "difficulty": "hard",
+      "tags": ["queues", "horizon", "redis", "architecture"],
+      "resources": [
+        {
+          "title": "Laravel Horizon Documentation",
+          "url": "https://laravel.com/docs/12.x/horizon",
+          "type": "docs",
+          "summary": "Supervisors, balance modes, auto-scaling, deployment via horizon:terminate, metrics and notifications."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "Your Laravel app consumes a standard SQS queue. In production logs you see the same job executing twice, roughly minutes apart, even though the code dispatches it only once. Which mechanism is the most likely cause, and what is the correct remedy?",
+      "options": [
+        "The failed_jobs table filled up, so SQS re-delivered old payloads from it.",
+        "The job's processing time exceeded the queue's visibility timeout, so SQS made the in-flight message visible again and a second worker received and executed it; fix by raising the visibility timeout above the job's worst-case runtime and/or routing poison messages to a dead-letter queue, plus keeping the job idempotent.",
+        "SQS guarantees exactly-once delivery, so the duplicate must mean the dispatch code ran twice; find and remove the second dispatch.",
+        "The worker crashed permanently and SQS lost the message, so Laravel recreated it from application logs."
+      ],
+      "correct": [1],
+      "explanation": "This is at-least-once delivery in action. SQS hides an in-flight message behind the queue's visibility timeout (config/queue.php, connections.sqs.visibility_timeout, default 30s at the AWS queue level). If the worker has not deleted the message by then — because it is still processing, or it died mid-job — SQS makes the message visible again and another worker can receive it, so the job executes twice. Exactly-once is not what standard SQS provides (only FIFO queues add deduplication, and even then only inside a window), so option C is wrong. The remedy has three parts: raise the visibility timeout above the worst-case runtime of the longest job on that queue (the same rule of thumb as retry_after > timeout for Redis/database drivers) so healthy slow jobs are not redelivered; configure a dead-letter queue with a maxReceiveCount so a genuinely stuck or poison message is quarantined instead of looping forever; and treat every SQS consumer as potentially duplicate by making side effects idempotent (unique business keys, dedupe markers) because visibility-timeout expiry can still race a long job. Laravel deletes the SQS message only after the job is handled, which is exactly why a hard worker crash leaves the message to be redelivered.",
+      "difficulty": "hard",
+      "tags": ["queues", "sqs", "visibility timeout", "dlq"],
+      "resources": [
+        {
+          "title": "AWS SQS Visibility Timeout",
+          "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html",
+          "type": "docs",
+          "summary": "Visibility timeout mechanics behind duplicate delivery."
+        },
+        {
+          "title": "Laravel Queues Documentation",
+          "url": "https://laravel.com/docs/12.x/queues",
+          "type": "docs",
+          "summary": "SQS driver configuration and queue connections."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "You are joining a Symfony project that processes messages with Messenger over a Doctrine transport. A handler occasionally throws because a third-party API is briefly down, and the team suspects messages are being retried too aggressively or lost entirely. Explain Messenger's default retry behaviour (max_retries, delay, multiplier and their defaults), how to prevent a message from being retried when retrying is pointless, how the failure transport works and which console commands operate on it, and contrast the whole model with Laravel's $tries/$backoff/retryUntil plus failed_jobs approach. Mention the trade-offs of retrying on the consumer side versus letting the transport handle redelivery.",
+      "options": [],
+      "correct": [],
+      "explanation": "Default retry behaviour: when a handler throws, Messenger does not let the message die — the transport's retry_strategy sends the message back to be consumed again with an increasing delay. The framework defaults are max_retries: 3, delay: 1000 (milliseconds), multiplier: 2 and max_delay: 0 (no upper bound), so retries wait roughly 1s, then 2s, then 4s (each retry multiplies the previous delay) before the message is finally given up. These values are configurable per transport under framework.messenger.transports.<name>.retry_strategy, and they live on the transport because retrying belongs to delivery, not to business logic. Skipping retries: throwing UnrecoverableMessageHandlingException tells Messenger the message can never succeed (e.g. schema-valid but semantically invalid payload), so it skips the retry strategy and goes straight to the failure transport — the counterpart of a Laravel guard that throws immediately rather than burning $tries. Failure transport: configure framework.messenger.failure_transport to name another transport (commonly a doctrine transport used as a dead-letter queue); messages whose retries are exhausted are stored there instead of being lost, and messenger:failed:show lists them while messenger:failed:retry re-dispatches selected failures (messenger:failed:remove deletes). This mirrors Laravel exactly: failed_jobs plus queue:failed/queue:retry, except Laravel keeps failures in one database table while Messenger keeps them in a real transport you could point at a different system. Trade-off: retrying on the consumer (Laravel backoff, Messenger retry_strategy) keeps the message inside the framework's attempt bookkeeping and lets you apply per-job logic such as retryUntil(), but it still occupies a worker slot; transport-level redelivery (SQS visibility timeout, Messenger Redis redeliver_timeout) protects against worker crashes but can create duplicates, which is why idempotent handlers are the ultimate safety net in both frameworks.",
+      "difficulty": "hard",
+      "tags": ["symfony messenger", "retries", "failure transport", "queues"],
+      "resources": [
+        {
+          "title": "Symfony Messenger Documentation",
+          "url": "https://symfony.com/doc/current/messenger.html",
+          "type": "docs",
+          "summary": "Retry strategy configuration, failure transport and the messenger:failed console commands."
+        }
+      ]
+    }
+  ]
+}

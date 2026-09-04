@@ -1,0 +1,428 @@
+{
+  "topic": {
+    "slug": "concurrency-race-conditions",
+    "name": "Concurrency & Race Conditions",
+    "description": "Preventing and resolving database race conditions, transaction isolation, locking, and idempotency under concurrent requests.",
+    "color": "#ef4444",
+    "icon": "⚡",
+    "sort_order": 2
+  },
+  "resources": [
+    {
+      "title": "Laravel Docs: Database Transactions",
+      "url": "https://laravel.com/docs/12.x/database#database-transactions",
+      "type": "docs",
+      "summary": "DB::transaction, closures, rollback on exceptions, deadlock retry attempts, and manual locking (lockForUpdate, sharedLock)."
+    },
+    {
+      "title": "MySQL Docs: InnoDB Transaction Isolation Levels",
+      "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-isolation-levels.html",
+      "type": "docs",
+      "summary": "The four isolation levels as implemented by InnoDB, the REPEATABLE READ default, and the anomalies each level prevents."
+    },
+    {
+      "title": "PostgreSQL Docs: Transaction Isolation",
+      "url": "https://www.postgresql.org/docs/current/transaction-iso.html",
+      "type": "docs",
+      "summary": "Isolation levels and anomaly definitions from the SQL standard; useful when comparing MySQL and PostgreSQL defaults."
+    },
+    {
+      "title": "Martin Fowler: Optimistic Offline Lock",
+      "url": "https://martinfowler.com/eaaCatalog/optimisticOfflineLock.html",
+      "type": "docs",
+      "summary": "The pattern behind version columns: detect conflicting concurrent edits and resolve them instead of silently overwriting."
+    },
+    {
+      "title": "Martin Fowler: Pessimistic Offline Lock",
+      "url": "https://martinfowler.com/eaaCatalog/pessimisticOfflineLock.html",
+      "type": "docs",
+      "summary": "Preventing conflicts by locking data before editing; when to prefer it over optimistic locking and why row locks rarely fit long human edits."
+    },
+    {
+      "title": "Doctrine ORM: Transactions and Concurrency",
+      "url": "https://www.doctrine-project.org/projects/doctrine-orm/en/current/reference/transactions-and-concurrency.html",
+      "type": "docs",
+      "summary": "Doctrine lock modes (NONE, OPTIMISTIC, PESSIMISTIC_READ/WRITE), @Version optimistic locking, and OptimisticLockException."
+    },
+    {
+      "title": "Laravel Docs: Cache Atomic Locks",
+      "url": "https://laravel.com/docs/12.x/cache#atomic-locks",
+      "type": "docs",
+      "summary": "Cache::lock for coordinating work across servers; advisory semantics and why cache locks are not a correctness guarantee."
+    }
+  ],
+  "questions": [
+    {
+      "type": "single",
+      "prompt": "An order placement flow inserts an order row, deducts stock, and charges the customer inside one database transaction. Halfway through, the database server crashes and the connection dies. When the server comes back, there is no order row, the customer was never charged, and the stock deduction is not visible to anyone. Which ACID property is primarily responsible for this all-or-nothing outcome?",
+      "options": [
+        "Atomicity - the statements of a transaction are treated as one indivisible unit, so the partial effects of the uncommitted transaction were rolled back",
+        "Consistency - the database only persists changes that satisfy declared constraints such as foreign keys and checks",
+        "Isolation - concurrent transactions cannot observe each other's uncommitted changes",
+        "Durability - once a transaction commits, its effects survive a crash"
+      ],
+      "correct": [0],
+      "explanation": "Atomicity means the transaction is all-or-nothing: the crash interrupted the transaction before COMMIT, so recovery rolled back every statement it had already executed, and no partial effect was ever visible. That is exactly what the scenario describes.\n\nConsistency (B) is about the database never moving from one valid state to an invalid one (constraints, invariants); it is not the mechanism that erased the partial work. Isolation (C) governs how concurrent transactions see each other's writes, and a crash is not about concurrency visibility. Durability (D) only applies AFTER a COMMIT has succeeded - if this transaction had committed and then the server crashed, durability would guarantee the charge survived via the redo log. Here the commit never happened, so durability was never engaged.\n\nFramework specifics: Laravel's DB::transaction(function () { ... }) automatically issues a ROLLBACK and rethrows the exception when the closure throws; Symfony's DBAL Connection::transactional() does the same. Raw PDO does nothing automatic - if you catch an exception and keep going, or never commit, you silently leak a transaction - which is exactly why both frameworks provide these helpers. InnoDB implements rollback with its undo log: it keeps the before-images of changed rows so partial statements can be undone during crash recovery.",
+      "difficulty": "easy",
+      "tags": ["ACID", "transactions", "atomicity"],
+      "resources": [
+        {
+          "title": "Laravel Docs: Database Transactions",
+          "url": "https://laravel.com/docs/12.x/database#database-transactions",
+          "type": "docs",
+          "summary": "How DB::transaction wraps a closure, rolls back on exceptions, and rethrows."
+        },
+        {
+          "title": "Doctrine DBAL: Transactions",
+          "url": "https://www.doctrine-project.org/projects/doctrine-dbal/en/current/reference/transactions.html",
+          "type": "docs",
+          "summary": "transactional(), beginTransaction/commit/rollBack semantics in DBAL."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "A Laravel API runs on MySQL/InnoDB using the default database configuration. A colleague proposes setting the session isolation level to SERIALIZABLE 'to be safe'. What is the DEFAULT transaction isolation level of MySQL InnoDB - the level your connection already runs at unless someone changed it?",
+      "options": [
+        "READ UNCOMMITTED",
+        "READ COMMITTED",
+        "REPEATABLE READ",
+        "SERIALIZABLE"
+      ],
+      "correct": [2],
+      "explanation": "MySQL/InnoDB defaults to REPEATABLE READ. This is a classic trap because PostgreSQL defaults to READ COMMITTED, and many developers who mostly worked with PostgreSQL confidently answer READ COMMITTED. Knowing the engine defaults matters: the same PHP code behaves differently on MySQL and PostgreSQL unless the isolation level is pinned explicitly.\n\nUnder REPEATABLE READ, InnoDB uses MVCC consistent (snapshot) reads: all plain SELECTs inside one transaction read from the snapshot taken at the first read, so a row's value cannot change between two reads in the same transaction and newly inserted rows by other transactions are invisible - behavior stronger than the SQL standard minimum. SERIALIZABLE is stricter still (in InnoDB it also converts plain SELECTs into locking reads), but it costs concurrency: more lock waits, more deadlock potential, and lower throughput, so it should be a deliberate, per-need choice, not a blanket default.\n\nFramework specifics: Laravel does not force an isolation level - your connections use the server default unless you issue something like DB::statement('SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED') on connection setup. In Symfony, Doctrine DBAL lets you configure a connection-level default isolation, but the framework itself never changes it silently. In an interview, explain the trade-off rather than just naming the default: READ COMMITTED gives better concurrency with statement-level snapshots; REPEATABLE READ is safer for read-then-act logic; SERIALIZABLE is reserved for the rare cases where phantoms matter more than throughput.",
+      "difficulty": "easy",
+      "tags": ["isolation levels", "MySQL", "defaults", "InnoDB"],
+      "resources": [
+        {
+          "title": "MySQL Docs: InnoDB Transaction Isolation Levels",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-isolation-levels.html",
+          "type": "docs",
+          "summary": "Default level, per-level anomaly prevention, and the cost of SERIALIZABLE."
+        },
+        {
+          "title": "PostgreSQL Docs: Transaction Isolation",
+          "url": "https://www.postgresql.org/docs/current/transaction-iso.html",
+          "type": "docs",
+          "summary": "PostgreSQL's READ COMMITTED default - the contrast every cross-database engineer should know."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "A Laravel app talks to a MySQL instance whose isolation level was lowered to READ COMMITTED (which is also PostgreSQL's default). Transaction A reads a product row and sees price = 100. Transaction B updates that same row to price = 110 and commits. Transaction A, still inside its transaction, reads the same row again and now sees 110. Which anomaly just occurred?",
+      "options": [
+        "A dirty read",
+        "A non-repeatable read",
+        "A phantom read",
+        "A lost update"
+      ],
+      "correct": [1],
+      "explanation": "This is a non-repeatable read: within one transaction, the same row read twice returned different values because another transaction committed a change in between. Note it is NOT a dirty read - B committed before A's second read, so A only ever saw committed data.\n\nThe three anomalies to distinguish: a dirty read is seeing another transaction's UNCOMMITTED data and is only possible at READ UNCOMMITTED. A non-repeatable read is a committed value changing between two reads of the SAME row, which READ COMMITTED allows (each statement gets a fresh snapshot). A phantom read is new ROWS appearing in a range query result between two executions - also allowed at READ COMMITTED and, per the SQL standard, at REPEATABLE READ. A lost update is a different beast: two transactions both read a value, both write, and the last write silently discards the first (locking or an atomic UPDATE fixes that, not just isolation).\n\nEngine nuance that makes this question senior-level: on MySQL at its default REPEATABLE READ, this exact scenario would NOT produce a non-repeatable read, because InnoDB snapshot reads inside a transaction all read from the same snapshot - the second SELECT would still return 100. On PostgreSQL and on MySQL configured to READ COMMITTED, it happens exactly as described. So the answer depends on the engine AND its configured level, which is why a real engineer never reasons about isolation without naming the database.",
+      "difficulty": "easy",
+      "tags": ["isolation levels", "non-repeatable read", "MySQL"],
+      "resources": [
+        {
+          "title": "MySQL Docs: Consistent Nonlocking Reads",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-consistent-read.html",
+          "type": "docs",
+          "summary": "How MVCC snapshots make REPEATABLE READ reads stable within a transaction."
+        },
+        {
+          "title": "MySQL Docs: InnoDB Transaction Isolation Levels",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-isolation-levels.html",
+          "type": "docs",
+          "summary": "Which anomalies each level permits or prevents."
+        }
+      ]
+    },
+    {
+      "type": "multi",
+      "prompt": "Which of the following statements about dirty reads are TRUE? Select all that apply.",
+      "options": [
+        "A dirty read occurs when a transaction reads data that was written by another transaction which has not yet committed",
+        "READ COMMITTED and all higher isolation levels prevent dirty reads, meaning uncommitted data is never visible to other transactions",
+        "The MySQL default isolation level is READ UNCOMMITTED, chosen specifically to prevent dirty reads",
+        "A dirty read and a non-repeatable read are two different names for the same anomaly"
+      ],
+      "correct": [0, 1],
+      "explanation": "A is the textbook definition: you read data that may still be rolled back, so you can act on information that never officially existed - dangerous for anything financial. B is correct: from READ COMMITTED upward, reads only ever see committed data, so dirty reads are impossible. InnoDB's MVCC architecture makes this structural: a reader never blocks on a writer and never sees uncommitted versions.\n\nC is doubly wrong: MySQL's default is REPEATABLE READ, and READ UNCOMMITTED is the level that PERMITS dirty reads - it exists for throughput at the price of correctness, never as a safety mechanism. D confuses two distinct anomalies: a dirty read is seeing uncommitted data (only at READ UNCOMMITTED), while a non-repeatable read is seeing a committed value change between two reads of the same row within one transaction (allowed at READ COMMITTED).\n\nWhy this matters in a PHP application: dirty reads are rare in practice because most apps run at READ COMMITTED or above, but the mental model is what interviewers probe - if a candidate cannot cleanly separate 'uncommitted data' from 'committed data changed mid-transaction', they will misdiagnose real concurrency bugs later.",
+      "difficulty": "easy",
+      "tags": ["isolation levels", "dirty read"],
+      "resources": [
+        {
+          "title": "MySQL Docs: InnoDB Transaction Isolation Levels",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-isolation-levels.html",
+          "type": "docs",
+          "summary": "Dirty reads are possible only at READ UNCOMMITTED; every higher level prevents them."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "To prevent overselling, you write: Product::where('id', $id)->lockForUpdate()->first() and then decrement stock. A colleague 'optimizes' by moving that locked SELECT outside any transaction, arguing that locking the row is all that matters and a transaction is unnecessary overhead. Under MySQL/InnoDB with autocommit enabled, what actually happens?",
+      "options": [
+        "Nothing changes - InnoDB holds the row lock until the PHP request ends, so the protection is exactly the same",
+        "The lock is released as soon as the statement finishes, because autocommit commits the implicit transaction immediately - your later UPDATE is no longer protected by the lock",
+        "lockForUpdate() outside a transaction throws a QueryException because pessimistic locks require an explicit transaction",
+        "InnoDB silently ignores the FOR UPDATE clause and performs a plain consistent read instead"
+      ],
+      "correct": [1],
+      "explanation": "InnoDB holds row locks only until the end of the transaction - COMMIT or ROLLBACK. With autocommit on, each statement is its own transaction, so SELECT ... FOR UPDATE takes the lock and releases it the moment the statement completes. Your subsequent UPDATE then runs with no lock held, another request can decrement in between, and you have the exact lost-update/oversell race the lock was supposed to prevent. A pessimistic lock is only meaningful when it is held across the read AND the write, which requires an explicit transaction.\n\nThe correct shape is: DB::transaction(function () { $product = Product::where('id', $id)->lockForUpdate()->first(); /* re-validate stock against this locked, fresh read */ $product->decrement('stock', $qty); });. The SELECT ... FOR UPDATE inside the transaction serializes concurrent writers on that row: a second request blocks at the SELECT until the first commits, then reads the updated value. lockForUpdate() compiles to ... FOR UPDATE; sharedLock() compiles to ... FOR SHARE.\n\nSymfony/Doctrine mirrors this: LockMode::PESSIMISTIC_WRITE on an EntityManager lock, or a locking DBAL query, requires an active transaction - Doctrine explicitly documents that pessimistic locks only make sense inside a transaction, because the lock must survive until commit. Related trap: lockForUpdate() on a query that is never executed, or a lazy relationship loaded after the lock scope ends, silently gives you nothing - the lock exists only while the transaction that took it is still open.",
+      "difficulty": "medium",
+      "tags": ["pessimistic locking", "lockForUpdate", "transactions", "trap question"],
+      "resources": [
+        {
+          "title": "Laravel Docs: Database Transactions (manual locking)",
+          "url": "https://laravel.com/docs/12.x/database#database-transactions",
+          "type": "docs",
+          "summary": "lockForUpdate/sharedLock usage and the requirement to stay inside the transaction."
+        },
+        {
+          "title": "MySQL Docs: Locking Reads",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html",
+          "type": "docs",
+          "summary": "FOR UPDATE/FOR SHARE semantics and that locks are held until the transaction ends."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "Users double-click the 'Pay now' button, and a network retry can deliver the same logical request twice - possibly milliseconds apart, concurrently. Your payment provider charges once per API call. Design a Laravel endpoint POST /api/payments so that exactly one charge ever happens, even when two identical requests race. In your answer, address: (1) what mechanism is the source of truth for deduplication and why an in-memory or Redis-only guard is not enough, (2) what the second request observes, (3) how concurrency between two identical in-flight requests is resolved, and (4) how the payment provider call itself is protected.",
+      "options": [],
+      "correct": [],
+      "explanation": "The design that survives an interview is DB-backed idempotency with a unique constraint as the final arbiter.\n\n(1) The client sends an idempotency key (a UUID it generates once per logical payment attempt, often as an Idempotency-Key header or a client_request_id body field). Your payments table has a UNIQUE index on (user_id, idempotency_key). The flow: validate, then INSERT a payments row with status = 'pending' and that key, COMMIT, then call the provider. The source of truth is the database unique index, never the cache: a Redis-only guard (Cache::add or SET NX with a TTL) can lose - eviction, expiry, or a Redis restart between the two duplicate requests - and then the second request charges again. Cache is an optimization layer (e.g., short-lived Cache::lock to avoid wasted work), not a correctness guarantee.\n\n(2/3) When the second identical request arrives, its INSERT hits the unique index and throws a QueryException with a duplicate-key error (MySQL error 1062, SQLSTATE 23000). You catch exactly that error, load the existing payment row by idempotency key, and return the stored result - replaying the original HTTP response. This resolves the race even when both requests are in flight simultaneously: both attempt the INSERT, the database serializes them, exactly one INSERT succeeds and becomes the owner of the charge, the loser gets the duplicate-key exception and turns into a reader. Note this is why you must NOT rely on a SELECT-then-INSERT check: two concurrent requests can both pass the SELECT; only the unique index makes the decision final.\n\n(4) The provider call needs protection too. Best practice is to pass the same idempotency key to the provider (Stripe's Idempotency-Key does exactly this), so even if your own dedup failed or the process died after charging but before saving the response, the provider returns the original charge instead of creating a second one. Additionally, the state transition from pending to succeeded (or failed) should be an atomic guarded UPDATE, e.g. Payments::where('id', $paymentId)->where('status', 'pending')->update(['status' => 'succeeded', 'provider_ref' => $ref]) and check the affected-row count: if it returns 0, another copy of the request already finalized this payment, so do not charge again. Store the provider response on the row so a replay can return the original result verbatim.\n\nAlso be ready to discuss: an idempotency key that expires (retention policy) is fine as long as the provider key mapping is stable; different keys for the same underlying order should be blocked by an additional unique index on order_id, because a user can otherwise generate two keys and get charged twice; and Symfony equivalents follow the same pattern - Messenger handlers must be idempotent because the transport is at-least-once, and the unique-constraint-plus-catch approach is framework-agnostic.",
+      "difficulty": "medium",
+      "tags": ["idempotency", "double-submit", "payments", "unique constraint", "race condition"],
+      "resources": [
+        {
+          "title": "Stripe Docs: Idempotent Requests",
+          "url": "https://docs.stripe.com/api/idempotent_requests",
+          "type": "docs",
+          "summary": "The canonical Idempotency-Key pattern used by payment providers."
+        },
+        {
+          "title": "Laravel Docs: Migrations (unique indexes)",
+          "url": "https://laravel.com/docs/12.x/migrations#unique-indexes",
+          "type": "docs",
+          "summary": "Declaring the UNIQUE constraint that arbitrates duplicate requests."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "You need to decrement a product's stock by 1 on every order, safely under many concurrent requests. Which single statement is guaranteed not to lose updates on its own - with no surrounding transaction and no application-level lock?",
+      "options": [
+        "$product = Product::find($id); $product->stock -= 1; $product->save();",
+        "Product::where('id', $id)->decrement('stock');",
+        "$product = Product::where('id', $id)->lockForUpdate()->first(); $product->stock -= 1; $product->save();",
+        "$product = Product::find($id); DB::table('products')->where('id', $id)->update(['stock' => $product->stock - 1]);"
+      ],
+      "correct": [1],
+      "explanation": "Option B compiles to a single atomic statement: UPDATE products SET stock = stock - 1 WHERE id = ?. The database executes it under an internal row lock, so concurrent executions are serialized at the statement level and no update is lost - no explicit transaction and no application lock are needed, because a single UPDATE is already atomic in autocommit mode.\n\nOptions A and D are the classic read-modify-write race: each does a separate read and then a separate write based on the read value. Two requests can both read stock = 5 and both write 4, losing one decrement even though the writes never collide in time. D is just A dressed up as an UPDATE - the read still happens outside the atomic write, so it races identically. Option C sounds safe but is not guaranteed here: lockForUpdate() only holds its lock until the end of the transaction, and with autocommit (no explicit transaction) the lock is gone before the save() runs - the same trap as taking the lock 'just for the SELECT'.\n\nThe nuances that push this to senior level: (1) If the stock must never go negative, use a conditional atomic update: Product::where('id', $id)->where('stock', '>=', $qty)->decrement('stock', $qty) and check that the affected-row count is 1 - the WHERE clause and the decrement happen in the same statement, so the guard cannot be raced. (2) An atomic UPDATE fixes a single-column invariant, but NOT multi-step workflows (insert booking rows, decrement stock, write an order) - those still need a transaction, because a crash between the steps must not leave stock decremented with no booking. (3) Eloquent's increment/decrement do not run model events and do not round-trip the new value; if you need the new value returned, MySQL's RETURNING or a follow-up SELECT inside the same transaction is required. (4) Doctrine ORM has no increment helper: the safe equivalent is a partial DQL UPDATE or native SQL with the same 'SET x = x +/- n' shape - calling $entity->setStock($entity->getStock() - 1) and flushing is a read-modify-write and races exactly like option A.",
+      "difficulty": "medium",
+      "tags": ["atomic updates", "increment", "race condition", "lost update"],
+      "resources": [
+        {
+          "title": "Laravel Docs: Query Builder (increments and decrements)",
+          "url": "https://laravel.com/docs/12.x/queries#increments-and-decrements",
+          "type": "docs",
+          "summary": "increment()/decrement() and the atomic UPDATE they generate."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "Inside a Laravel DB::transaction(function () { ... }) you call DB::transaction() again for a nested piece of work. The inner closure throws, and you catch that exception inside the outer closure. What actually happened at the database level?",
+      "options": [
+        "The entire outer transaction is rolled back, because any exception thrown inside a nested transaction aborts everything",
+        "Laravel keeps a transaction counter: the inner call creates a SAVEPOINT, the failure rolls back only to that savepoint, and the outer transaction can still commit its remaining work",
+        "Two fully independent physical transactions run, each committing or rolling back on its own",
+        "Nesting DB::transaction() is forbidden and throws a 'transaction already active' exception"
+      ],
+      "correct": [1],
+      "explanation": "Laravel's connection tracks a transaction level. The first DB::transaction() issues a real BEGIN (level 0 -> 1). When you nest, level 1 -> 2 and Laravel issues SAVEPOINT trans2 (savepoints must be enabled for the driver - they are by default for MySQL). The inner DB::transaction() catches its closure's exception, rolls back to that savepoint, and rethrows. Because you catch the rethrown exception inside the outer closure, the outer transaction stays alive and can commit the work it did before and after the inner block. Only the inner block's changes are undone.\n\nThe trap here is the assumption that 'an exception anywhere means everything rolls back'. That is true only when the exception escapes the outermost DB::transaction() closure - Laravel then rolls back the whole physical transaction and rethrows. When the inner failure is contained, semantics are savepoint-scoped.\n\nWhy it matters in real code: you can write a helper that attempts a risky insert inside its own DB::transaction() and swallows known failures (e.g., a duplicate key), while the caller keeps the surrounding business transaction - this is a legitimate pattern for best-effort side effects. But be careful: if you need to know whether the inner block committed, remember that with savepoints the inner changes are still logically part of the ONE physical transaction - they become visible to others only when the outer COMMIT runs, and they disappear if the outer transaction rolls back later. That surprises developers who think of nested transactions as isolated units. (Doctrine/Symfony differs: DBAL does not auto-manage nested transactions the same way - re-entrant beginTransaction needs savepoint support to be enabled, and the ORM documentation warns against manual nested transaction handling; Symfony's Messenger doctrine_transaction middleware keeps a single transaction per handled message.)",
+      "difficulty": "medium",
+      "tags": ["DB::transaction", "nested transactions", "savepoints"],
+      "resources": [
+        {
+          "title": "Laravel Docs: Database Transactions",
+          "url": "https://laravel.com/docs/12.x/database#database-transactions",
+          "type": "docs",
+          "summary": "Transactions and the attempts parameter for deadlock retries."
+        },
+        {
+          "title": "MySQL Docs: SAVEPOINT",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/savepoint.html",
+          "type": "docs",
+          "summary": "Native savepoint semantics that Laravel's nesting maps onto."
+        }
+      ]
+    },
+    {
+      "type": "multi",
+      "prompt": "Your queue consumer runs on an at-least-once transport, so the same job (e.g., a webhook handler that credits a wallet or sends an SMS) can be delivered more than once, sometimes while an earlier copy is still running. Which of the following measures genuinely make processing effectively idempotent? Select all that apply.",
+      "options": [
+        "Record a consumer marker with a unique index in the SAME database transaction as the business effect (e.g., insert a processed_events row keyed by the event's natural id); when a duplicate arrives, the insert fails with a duplicate-key error and the handler returns early",
+        "Make the business write itself conditional and idempotent, e.g., an UPDATE ... WHERE status = 'pending' that affects 0 rows when the work is already done, so re-execution becomes a no-op",
+        "Wrap the whole handler body in Cache::lock() so that only one copy of the job runs at a time",
+        "Switch the queue driver to 'sync' so that jobs can never be delivered twice"
+      ],
+      "correct": [0, 1],
+      "explanation": "A and B are the two robust patterns. A is the transactional outbox-style marker: because the marker insert commits atomically with the side effect, a duplicate delivery either finds the marker (and skips) or, in the race where both copies run concurrently, loses the unique-constraint race - one insert succeeds, the other gets a duplicate-key error (SQLSTATE 23000) and must treat that as 'already done'. The database is the source of truth. B is idempotency of the write itself: a guarded UPDATE (e.g., SET status = 'credited' WHERE id = ? AND status = 'pending') can only take effect once because the second execution matches zero rows. This is also the shape of an idempotent credit: UPDATE users SET balance = balance + X is NOT idempotent, so you gate it on a one-time state transition or a unique ledger entry.\n\nC is not idempotency: a cache lock only prevents two copies from running CONCURRENTLY. Once the first copy finishes and releases the lock, a re-delivered copy acquires the lock and runs the handler again - duplicate effect. Cache locks are advisory and can also be lost on expiry, eviction, or a Redis restart, so they must never be the only defense for money-moving work. D is nonsense: the sync driver processes inline, which removes queues but does not remove the transport's at-least-once redelivery (and a failed webhook retry would still re-run the code).\n\nFramework notes: Laravel's ShouldBeUnique uses the cache for its deduplication - explicitly a best-effort optimization, not a guarantee. Symfony Messenger gives you no built-in deduplication; the recommended approach is DB-backed idempotency keys or a Redis/DB claim table, exactly as in A. The general law to state in an interview: at-least-once delivery plus an idempotent consumer is the only way to get 'exactly-once effect' in distributed systems; 'exactly-once delivery' is a lie told by some brokers.",
+      "difficulty": "medium",
+      "tags": ["idempotency", "queue", "race condition", "duplicate processing"],
+      "resources": [
+        {
+          "title": "Laravel Docs: Unique Jobs",
+          "url": "https://laravel.com/docs/12.x/queues#unique-jobs",
+          "type": "docs",
+          "summary": "ShouldBeUnique and why cache-based deduplication is best-effort."
+        },
+        {
+          "title": "Laravel Docs: Cache Atomic Locks",
+          "url": "https://laravel.com/docs/12.x/cache#atomic-locks",
+          "type": "docs",
+          "summary": "Advisory locking semantics: concurrency control, not idempotency."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "Transaction A runs SELECT * FROM products WHERE id = 42 FOR UPDATE and holds the row lock. Transaction B then executes a plain, NON-locking SELECT * FROM products WHERE id = 42 (no FOR UPDATE/FOR SHARE) on the same MySQL/InnoDB instance at its default REPEATABLE READ level. What happens to B?",
+      "options": [
+        "B blocks until A commits or rolls back, because the row is locked",
+        "B immediately fails with a lock-wait timeout (error 1205)",
+        "B reads the row right away: InnoDB consistent (snapshot) reads do not wait for row locks and see the last committed version of the row",
+        "B reads A's uncommitted new value for that row"
+      ],
+      "correct": [2],
+      "explanation": "This is one of the most common locking misconceptions: 'the row is locked, so reads block'. Under InnoDB's MVCC, plain SELECTs are consistent non-locking reads: they read from a snapshot and never wait on row locks, so B returns immediately with the last COMMITTED version of the row. And because B is a consistent read, it can never see A's uncommitted value either - option D describes a dirty read, which is impossible at REPEATABLE READ (and even at READ COMMITTED). Only LOCKING reads (SELECT ... FOR UPDATE / FOR SHARE) and writes contend on the row lock.\n\nThe practical consequence is exactly why this is a trap: locking only coordinates OTHER transactions that also respect the lock protocol. If B's author reads the price with a plain SELECT and then tries to UPDATE the row, that UPDATE will block until A commits - and then it will write based on the stale snapshot value it read earlier, silently discarding A's change: a lost update. FOR UPDATE protects a read-then-write sequence only for the transaction that takes the lock, and only if its guarded re-reads happen through locking reads inside the transaction.\n\nDoctrine/DBAL behaves identically: LockMode::PESSIMISTIC_WRITE issues SELECT ... FOR UPDATE, and a subsequent plain read on the same entity within the transaction may return the stale cached/snapshot version - which is why Doctrine's pessimistic locking docs tell you to re-read after acquiring the lock. The rule to state: pessimistic locks serialize writers and lock-respecting readers; snapshot readers are unaffected, and your application logic must never assume that taking a lock made the data 'frozen' for everyone.",
+      "difficulty": "hard",
+      "tags": ["pessimistic locking", "MVCC", "lockForUpdate", "trap question"],
+      "resources": [
+        {
+          "title": "MySQL Docs: Locking Reads",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html",
+          "type": "docs",
+          "summary": "FOR UPDATE/FOR SHARE and which statements actually contend for row locks."
+        },
+        {
+          "title": "MySQL Docs: Consistent Nonlocking Reads",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-consistent-read.html",
+          "type": "docs",
+          "summary": "Why plain SELECTs do not block and never see uncommitted data."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "An event has 2 seats left and ten requests race to book one seat each; the last two must win and the rest must get a clean 'sold out' answer. Design a solution for a Laravel app on MySQL that guarantees no overselling. Compare pessimistic row locking and optimistic versioning for this case, explain what failure modes exist (including database deadlocks), and say when you would instead serialize the work with a queue.",
+      "options": [],
+      "correct": [],
+      "explanation": "The core problem is a check-then-act race: any design that reads availability and later writes the booking based on that read can oversell unless the read and the write are made atomic with respect to other bookers.\n\nPessimistic approach (recommended for this exact case): serialize bookers on the event's row.\nDB::transaction(function () use ($eventId, $userId, $qty) { $event = Event::query()->whereKey($eventId)->lockForUpdate()->first(); if ($event->available_seats < $qty) { abort(409, 'No seats left'); } Booking::create([...]); $event->decrement('available_seats', $qty); });\nThe SELECT ... FOR UPDATE makes concurrent bookers queue on the row lock: the second transaction blocks at the SELECT until the first commits, then reads the UPDATED availability, so it sees 1 seat and takes it, and the third sees 0 and gets the 409. Two rules make it correct: (1) the availability check MUST run on data read after the lock is acquired, inside the transaction - validating before lockForUpdate, or on a value cached earlier, is meaningless; (2) keep the transaction tiny - no HTTP calls, no e-mail, no slow work between lock and commit.\n\nDeadlocks: if booking touches multiple locked rows (event row plus a per-seat row, or two events), two transactions can acquire locks in opposite orders and MySQL will kill one with error 1213 (deadlock) or time one out with error 1205. Mitigations: always lock resources in a consistent order (e.g., ascending primary key), lock fewer rows, use indexes so range scans do not take broad gap locks, and add a bounded retry for genuine deadlocks - Laravel's DB::transaction($callback, 5) re-executes the closure when the failure is a deadlock/lock timeout, and you should retry only transient DB errors, never a business 409. In Symfony/Doctrine, after a deadlock the EntityManager is unusable (Doctrine closes it after exceptions), so you must discard it, rebuild one, and retry the whole unit of work.\n\nOptimistic approach: give the event a version column (or compare availability directly). The booking becomes a guarded atomic write: $updated = DB::table('events')->whereKey($eventId)->where('available_seats', '>=', $qty)->decrement('available_seats', $qty); and if $updated === 0, another transaction already took the seats - re-read and present 'sold out'. When the flow is more than a counter (booking rows must be inserted atomically too), wrap everything in a transaction and use a version compare-and-swap (UPDATE ... SET version = version + 1 WHERE id = ? AND version = ?) checking affected rows. Optimistic locking shines when conflicts are RARE and reads dominate (a shopping-cart detail page), because it never blocks readers and wastes no lock waits; it hurts when contention is high, because losers pay the cost of re-reading and retrying, and naive 'retry with stale data' reintroduces the overwrite bug.\n\nWhen to use a queue instead: if booking can be asynchronous (the response does not have to confirm instantly), you can serialize per event by routing all bookings for one event to a single worker or guarding a job with a per-event Redis lock / SKIP LOCKED claim (SELECT ... FOR UPDATE SKIP LOCKED on a work-queue table). Queues also help when the critical section is long or touches slow external systems. The trade-off to name: a DB row lock gives you strong, simple correctness for a short synchronous critical section - prefer it when correctness is paramount and contention is moderate; reach for queues when you need bounded parallelism, backpressure, or retries anyway. The general decision rule the interviewer wants to hear: transaction for atomicity of a multi-step write, row lock when concurrent check-then-act on the same row must be serialized, cache lock/advisory lock for coordination where losing the race is acceptable, and a queue when work can be deferred and must be retried.",
+      "difficulty": "hard",
+      "tags": ["optimistic locking", "pessimistic locking", "deadlock", "transactions", "queue"],
+      "resources": [
+        {
+          "title": "Martin Fowler: Pessimistic Offline Lock",
+          "url": "https://martinfowler.com/eaaCatalog/pessimisticOfflineLock.html",
+          "type": "docs",
+          "summary": "When serializing access with locks beats conflict detection."
+        },
+        {
+          "title": "Laravel Docs: Database Transactions",
+          "url": "https://laravel.com/docs/12.x/database#database-transactions",
+          "type": "docs",
+          "summary": "DB::transaction closure usage and the attempts argument that retries deadlocks."
+        },
+        {
+          "title": "MySQL Docs: Deadlocks",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-deadlocks.html",
+          "type": "docs",
+          "summary": "How InnoDB detects deadlocks, rolls back the victim, and how to reduce them."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "Two admins edit the same product record through a long-lived form. Admin A saves after 15 minutes; Admin B, who loaded the page before A's save, saves one minute later and silently overwrites A's changes. Design the fix using optimistic locking: (1) how you would implement it in Doctrine ORM (Symfony) and in plain Eloquent (Laravel, no third-party package), (2) what happens at save time in each case, (3) how the UI should react, and (4) when you would instead use pessimistic locking - and why a database row lock is usually the wrong tool for a 15-minute human edit.",
+      "options": [],
+      "correct": [],
+      "explanation": "The bug is a lost update: two read-modify-write cycles on the same row where the last writer silently discards the first writer's committed changes. Isolation level alone does not fix this - READ COMMITTED and REPEATABLE READ both allow lost updates when neither writer locks - so you need optimistic or pessimistic concurrency control.\n\n(1) Doctrine ORM (Symfony): add an integer version column and let Doctrine manage it. In PHP 8 attributes: #[ORM\\Version] #[ORM\\Column(type: 'integer')] private int $version = 1;. Doctrine automatically appends AND version = ? to the UPDATE and increments the version on every flush. Alternatively call $em->lock($product, LockMode::OPTIMISTIC, $expectedVersion) before flush for an early check. Eloquent has NO built-in optimistic locking, so implement the compare-and-swap yourself inside a transaction: DB::table('products')->where('id', $id)->where('version', $expectedVersion)->update([/* new attribute values */, 'version' => $expectedVersion + 1]); and inspect the affected-row count.\n\n(2) What happens at save time: when the version in the WHERE clause does not match the current row, the UPDATE matches zero rows. In Doctrine, flush() then throws Doctrine\\ORM\\OptimisticLockException (message like 'The optimistic lock on an entity failed'); in Eloquent, your affected count is 0, so you throw your own conflict (e.g., a 409-oriented exception or return false). Crucially, the row is NOT modified - the loser's write is refused atomically, which is the entire point of a compare-and-swap.\n\n(3) UI reaction: never silently retry the write with the stale data - a retry of the same payload would overwrite A's changes again, which is the bug you are fixing. Instead, reload the current row (now version N+1, containing A's changes), tell the user their save conflicted, and offer choices: review A's changes and merge, or consciously force-overwrite (which should re-run the CAS against the newest version, not skip it).\n\n(4) When pessimistic instead: pessimistic locking (SELECT ... FOR UPDATE, Doctrine LockMode::PESSIMISTIC_WRITE) is right when conflicts are frequent or expensive and the critical section is SHORT - milliseconds, machine-to-machine, inside one request - like the ticket-booking case where serializing bookers is cheaper than making losers retry. It is wrong for a 15-minute human edit: the row lock would be held across the whole editing session, blocking every other writer (and, per MVCC, still confusing readers), risking lock-wait timeouts and deadlocks, and tying up a connection. That is precisely why Fowler's Pessimistic Offline Lock pattern locks a separate lock record - not the business row - when the lock must outlive a transaction, and why optimistic locking with a version column is the standard answer for human-scale editing: conflicts are rare, retries are cheap, and no one is ever blocked. State the decision rule: conflicts rare / reads dominate / long human sessions -> optimistic; conflicts frequent / short critical section / retry is costly or unsafe -> pessimistic.",
+      "difficulty": "hard",
+      "tags": ["optimistic locking", "version column", "Doctrine @Version", "lockVersion", "lost update"],
+      "resources": [
+        {
+          "title": "Martin Fowler: Optimistic Offline Lock",
+          "url": "https://martinfowler.com/eaaCatalog/optimisticOfflineLock.html",
+          "type": "docs",
+          "summary": "Detecting conflicts instead of preventing them - the pattern behind version columns."
+        },
+        {
+          "title": "Doctrine ORM: Transactions and Concurrency",
+          "url": "https://www.doctrine-project.org/projects/doctrine-orm/en/current/reference/transactions-and-concurrency.html",
+          "type": "docs",
+          "summary": "@Version, LockMode::OPTIMISTIC, and OptimisticLockException semantics."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "A senior developer claims: 'MySQL/InnoDB at REPEATABLE READ cannot prevent phantom reads, because the SQL standard only requires phantom prevention at SERIALIZABLE - so we must raise our isolation level to get safe range reads.' Which statement is actually correct about InnoDB?",
+      "options": [
+        "They are right: at REPEATABLE READ another transaction's committed INSERT can appear between two executions of the same range query, so SERIALIZABLE is required for range consistency",
+        "They are right about the standard, and InnoDB at REPEATABLE READ offers no phantom protection at all - only SERIALIZABLE adds it",
+        "They are wrong about InnoDB: under REPEATABLE READ, locking range reads prevent phantoms via next-key (record + gap) locks, and plain snapshot reads see a transaction-stable snapshot - InnoDB is stricter than the standard's minimum REPEATABLE READ",
+        "Gap locks are only taken on MyISAM tables, so REPEATABLE READ behaves exactly as the standard says"
+      ],
+      "correct": [2],
+      "explanation": "The SQL standard says REPEATABLE READ may allow phantoms and only SERIALIZABLE must prevent them - the developer is right about the standard - but InnoDB's REPEATABLE READ is stricter than the standard's minimum. Two mechanisms do it: (1) plain SELECTs are MVCC snapshot reads, so within one transaction they always return the same row set regardless of what others commit; (2) LOCKING reads (SELECT ... FOR UPDATE / FOR SHARE) over a range use next-key locks - a record lock plus a gap lock on the index range - which block other transactions from INSERTing into that gap until the lock holder commits. So a locking range read cannot observe a phantom row, and other transactions cannot create one in the locked range.\n\nThe important nuance is the word 'locking': a NON-locking range read can return fewer rows than a later locking read would see, because the snapshot was taken before another transaction committed its inserts - snapshot reads are stable, not 'current'. If you need to re-scan and see everything that has committed since your snapshot, you must use locking reads (or raise isolation).\n\nCosts and traps that make this senior-level: gap locks are a frequent source of unexpected lock waits and deadlocks - a plain UPDATE or locking SELECT with a range predicate (or an unindexed predicate, which can lock the whole gap/table) makes unrelated INSERTs into that range block. InnoDB's SERIALIZABLE, for comparison, takes the standard literally by implicitly converting plain SELECTs into SELECT ... LOCK IN SHARE MODE (locking reads), which is why it is slow and deadlock-prone, not because it adds a magical new protection. Framework impact: a Doctrine query using PESSIMISTIC_WRITE over a range, or a Laravel where()->lockForUpdate() over many rows, inherits these gap-lock semantics - so prefer precise, index-backed predicates to keep the locked range small.",
+      "difficulty": "hard",
+      "tags": ["phantom read", "gap locks", "isolation levels", "MySQL", "trap question"],
+      "resources": [
+        {
+          "title": "MySQL Docs: InnoDB Transaction Isolation Levels",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-isolation-levels.html",
+          "type": "docs",
+          "summary": "REPEATABLE READ semantics, next-key locking, and what SERIALIZABLE actually adds."
+        },
+        {
+          "title": "MySQL Docs: Locking Reads",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html",
+          "type": "docs",
+          "summary": "Gap/next-key locks and the difference between locking and consistent reads."
+        }
+      ]
+    },
+    {
+      "type": "multi",
+      "prompt": "Your order flow on MySQL keeps hitting deadlocks (error 1213) and Laravel logs show a QueryException wrapping them. Which of the following practices GENUINELY reduce the FREQUENCY of deadlocks? Select all that apply.",
+      "options": [
+        "Acquire row locks in a consistent, global order across all transactions - for example, always locking rows in ascending primary-key order regardless of the order the request encountered them",
+        "Keep transactions short: do external HTTP calls, file I/O, and expensive computation before opening the transaction, and lock only the rows the flow truly needs",
+        "Write narrower, index-backed statements so each query locks fewer rows (fewer record locks and, under REPEATABLE READ, fewer gap locks)",
+        "Lower the isolation level to READ UNCOMMITTED so InnoDB takes no locks at all and deadlocks become impossible",
+        "Set DB::transaction($callback, 3) so deadlocked transactions are automatically re-executed up to three times"
+      ],
+      "correct": [0, 1, 2],
+      "explanation": "A deadlock is a circular wait: transaction 1 holds a lock transaction 2 needs while transaction 2 holds a lock transaction 1 needs. InnoDB detects the cycle and rolls back one victim (error 1213 / SQLSTATE 40001), so both transactions never finish. The three real frequency reducers: (A) consistent lock ordering - if every transaction takes locks in the same global order, a circular wait is impossible, because no transaction can hold a 'later' lock while waiting for an 'earlier' one; (B) short transactions shrink the window in which locks are held, so overlapping lock sets become far less likely - holding a DB transaction open across an HTTP call to a payment provider is a deadlock factory; (C) fewer locked rows means fewer chances for lock sets to overlap - precise WHERE clauses on indexed columns avoid full-range scans that, under REPEATABLE READ, take gap/next-key locks and block INSERTs into the whole range.\n\nD is a dangerous misconception: READ UNCOMMITTED does NOT remove write locks - INSERT/UPDATE/DELETE always take exclusive locks regardless of isolation - and it introduces dirty reads. It is a correctness trade, not a deadlock fix. E is a mitigation, not a frequency reducer: Laravel's second argument to DB::transaction is the number of attempts and re-executes the closure when the failure is caused by a deadlock or lock-wait timeout (default is 1 = no retry). Retrying is what you do AFTER a deadlock still happens - it converts occasional deadlocks into invisible successes but does nothing to stop them occurring.\n\nFramework notes: in Laravel the deadlock surfaces as a QueryException whose previous exception is a PDOException with error 1213 or a lock-wait timeout 1205; the attempts parameter is the idiomatic retry. In Symfony/Doctrine there is no built-in retry: after a deadlock Doctrine closes the EntityManager and you must discard it, rebuild the EM, and retry the whole unit of work - a classic Symfony gotcha. Also state the operational angle: monitor innodb_deadlocks / SHOW ENGINE INNODB STATUS to see the victim and the lock sequences, and fix the ordering, not just the symptom.",
+      "difficulty": "hard",
+      "tags": ["deadlock", "locking", "transactions", "retry"],
+      "resources": [
+        {
+          "title": "MySQL Docs: Deadlocks",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-deadlocks.html",
+          "type": "docs",
+          "summary": "Deadlock detection, victim selection, error 1213, and how to reduce occurrences."
+        },
+        {
+          "title": "Laravel Docs: Database Transactions",
+          "url": "https://laravel.com/docs/12.x/database#database-transactions",
+          "type": "docs",
+          "summary": "The attempts argument that retries a transaction on deadlock/lock timeout."
+        }
+      ]
+    }
+  ]
+}
