@@ -11,7 +11,7 @@ with correct answers + explanations + resources, and a local AI mentor.
 - **Laravel 13** + PHP 8.4 (Livewire 3 / Volt, Tailwind, Alpine)
 - **MySQL 8** (curriculum + progress), **Redis** (cache, queues, Horizon), **Meilisearch** (search — Phase 3)
 - **Laravel Horizon** (queue + failed-jobs dashboard — itself a study subject)
-- **Prism** → local **Qwen3.6-35B-A3B** via the Olympus LiteLLM proxy (AI mentor)
+- **Prism** → local **Qwen3.6-35B-A3B** (Mars llama.cpp, OpenAI-compatible `:11000`) (AI mentor)
 - Fully Dockerized (`docker compose`)
 
 ## Quick start
@@ -25,12 +25,16 @@ Open http://localhost:8180 — seeded user: `psswiderski@gmail.com` / `dojo1234`
 
 ### AI mentor
 
-The AI features talk to the local model through the LiteLLM proxy (`LLM_BASE_URL` in `.env`).
+The AI features talk to the local model directly on Mars (`LLM_BASE_URL` in `.env`,
+default `http://host.docker.internal:11000/v1` — OpenAI-compatible llama.cpp).
 The cluster is **not auto-started** — start it first:
 
 ```bash
-~/ai-cluster/cluster start      # then wait ~1 min warm-up
+~/ai-cluster/cluster start mars      # then wait ~1 min warm-up
 ```
+
+(Alternative: route through the Olympus LiteLLM proxy at `http://192.168.1.82:4001/v1`
+with model `mars-qwen35b` when that proxy is running.)
 
 The dashboard shows a live online/offline badge; when offline the app keeps working
 (quizzes, spaced repetition) and only the AI features degrade gracefully.

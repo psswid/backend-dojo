@@ -9,6 +9,8 @@ services:
     container_name: backend-dojo-app
     restart: unless-stopped
     working_dir: /var/www/html
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - .:/var/www/html
     env_file:
@@ -41,6 +43,8 @@ services:
     user: "1000:1000"
     restart: unless-stopped
     working_dir: /var/www/html
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: ["php", "artisan", "horizon"]
     volumes:
       - .:/var/www/html
@@ -60,6 +64,8 @@ services:
     user: "1000:1000"
     restart: unless-stopped
     working_dir: /var/www/html
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: ["php", "artisan", "schedule:work"]
     volumes:
       - .:/var/www/html
