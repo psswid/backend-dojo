@@ -12,7 +12,7 @@ class TopicIndex extends Component
 
     public function render(ProgressService $progress)
     {
-        $topics = Topic::orderBy('sort_order')->get();
+        $topics = Topic::withCount(['questions', 'lessons'])->orderBy('sort_order')->get();
 
         return view('livewire.topic-index', [
             'topics' => $topics,

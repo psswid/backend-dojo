@@ -49,6 +49,28 @@
           "The SOAP adapter is removed only after the last client migrates; port intended semantics, not legacy bugs"
         ]
       }
+    },
+    {
+      "type": "snippet",
+      "title": "parse_query_string: parse a URL query string into an array",
+      "difficulty": "medium",
+      "tags": ["query-string", "url-encoding", "parsing", "http"],
+      "description": "Implement parse_query_string(string $query): array. It parses a URL query string into an associative array. Rules: split on '&'; each pair is 'key=value' (the value may be empty); url-decode BOTH the key and the value (urldecode, so '+' becomes a space and %XX sequences decode); a pair without '=' has an empty-string value; empty pairs from leading/trailing/double '&' are skipped; if a key repeats, the last value wins. Examples: parse_query_string('a=1&b=hello+world') returns ['a' => '1', 'b' => 'hello world']; parse_query_string('a=1&a=2') returns ['a' => '2']; parse_query_string('q=a%20b%26c') returns ['q' => 'a b&c']; parse_query_string('') returns []; parse_query_string('flag') returns ['flag' => ''].",
+      "starter_code": "function parse_query_string(string $query): array\n{\n    // your code here\n}",
+      "test_suite": "expect('basic pairs', parse_query_string('a=1&b=2'), ['a' => '1', 'b' => '2']);\nexpect('last key wins', parse_query_string('a=1&a=2'), ['a' => '2']);\nexpect('plus decodes to space', parse_query_string('b=hello+world&a=x'), ['b' => 'hello world', 'a' => 'x']);\nexpect('percent decoding', parse_query_string('q=a%20b%26c'), ['q' => 'a b&c']);\nexpect('empty string', parse_query_string(''), []);\nexpect('key without value', parse_query_string('flag'), ['flag' => '']);\nexpect('skips empty pairs', parse_query_string('a=1&&b=2'), ['a' => '1', 'b' => '2']);\nexpect('empty value', parse_query_string('a='), ['a' => '']);",
+      "solution": "function parse_query_string(string $query): array\n{\n    if ($query === '') {\n        return [];\n    }\n\n    $result = [];\n    foreach (explode('&', $query) as $pair) {\n        if ($pair === '') {\n            continue;\n        }\n\n        $pos = strpos($pair, '=');\n        if ($pos === false) {\n            $result[urldecode($pair)] = '';\n        } else {\n            $key = urldecode(substr($pair, 0, $pos));\n            $value = urldecode(substr($pair, $pos + 1));\n            $result[$key] = $value;\n        }\n    }\n\n    return $result;\n}",
+      "rubric": null
+    },
+    {
+      "type": "debug",
+      "title": "parse_query_string leaves values percent/plus-encoded",
+      "difficulty": "medium",
+      "tags": ["query-string", "url-encoding", "parsing", "debugging"],
+      "description": "parse_query_string(string $query): array must url-decode both keys and values. The broken version splits pairs correctly but never runs urldecode, so '+', '%20' and '%26' stay literally encoded in the result. Add the missing decoding. Hint: urldecode() turns '+' into a space and decodes %XX sequences.",
+      "starter_code": "function parse_query_string(string $query): array\n{\n    $result = [];\n    foreach (explode('&', $query) as $pair) {\n        if ($pair === '') {\n            continue;\n        }\n        $parts = explode('=', $pair, 2);\n        $result[$parts[0]] = $parts[1] ?? '';\n    }\n    return $result;\n}",
+      "test_suite": "expect('percent decoding', parse_query_string('q=a%20b%26c'), ['q' => 'a b&c']);\nexpect('plus decodes to space', parse_query_string('b=hello+world'), ['b' => 'hello world']);\nexpect('key decoding', parse_query_string('a%20key=1'), ['a key' => '1']);",
+      "solution": "function parse_query_string(string $query): array\n{\n    if ($query === '') {\n        return [];\n    }\n\n    $result = [];\n    foreach (explode('&', $query) as $pair) {\n        if ($pair === '') {\n            continue;\n        }\n\n        $pos = strpos($pair, '=');\n        if ($pos === false) {\n            $result[urldecode($pair)] = '';\n        } else {\n            $key = urldecode(substr($pair, 0, $pos));\n            $value = urldecode(substr($pair, $pos + 1));\n            $result[$key] = $value;\n        }\n    }\n\n    return $result;\n}",
+      "rubric": null
     }
   ]
 }

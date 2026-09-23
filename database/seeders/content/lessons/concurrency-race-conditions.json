@@ -1,0 +1,1383 @@
+{
+  "topic_slug": "concurrency-race-conditions",
+  "lessons": [
+    {
+      "slug": "race-condition-basics",
+      "title": "What a race condition is: the two shapes behind the module",
+      "summary": "A race condition makes the result depend on which of two overlapping operations finishes first, not on the data itself. This lesson names the two shapes behind nearly every question in the module - read-modify-write and check-then-act - and shows the classic lost update on a stock counter.",
+      "minutes": 5,
+      "difficulty": "easy",
+      "tags": [
+        "race condition",
+        "concurrency",
+        "lost update",
+        "transactions"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Every question in this module — overselling, double payments, duplicate queue jobs, stale admin saves — is one of two stories wearing different clothes. Before the locking, the transactions and the idempotency keys, interviewers want to hear you name the underlying bug precisely: two operations raced, and an effect was lost or duplicated.\n\nPHP itself is single-threaded per request, but a Laravel app is many requests, many queue workers and many background processes sharing one database. Concurrent here does not mean parallel in time — it means overlapping, with no guarantee about who finishes first."
+          }
+        },
+        {
+          "key": "shapes",
+          "kind": "heading",
+          "title": "The two classic shapes"
+        },
+        {
+          "key": "shapes-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Nearly every race in a web app is one of these two shapes:\n\n- **Read-modify-write** — read a value, compute a new one, write it back. If two readers both start from the same value, the last writer silently wins and one update is lost.\n- **Check-then-act** — test some state, then act on the result. If two requests both pass the check before either write is visible, both act — even though only one should.\n\nThe interleaving point is always the same: **between the read/check and the write/act**, another request slips in. When the read and the write are two separate statements, nothing stops that slip."
+          }
+        },
+        {
+          "key": "lost-update",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-flow\">\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-a\">Request A<span class=\"tag\">worker</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-c\">SELECT stock<span class=\"tag\">reads 5</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-a\">UPDATE stock = 4<span class=\"tag\">A commits</span></span>\n  </div>\n  <div class=\"ld-col\"><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-b\">Request B<span class=\"tag\">worker</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-dim\">SELECT stock<span class=\"tag\">reads 5, stale</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-c\">UPDATE stock = 4<span class=\"tag\">overwrites A</span></span>\n  </div>\n  <div class=\"ld-col\"><span class=\"ld-arrow\">&#8658;</span></div>\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-r\">stock = 4<span class=\"tag\">one decrement lost</span></span>\n  </div>\n</div>",
+            "title": "The lost update: two decrements, one disappears",
+            "caption": "Both requests read stock = 5 before either writes. A commits 4; B, still working from its stale read, writes 4 over it. Two decrements happened, yet the final value is 4 — one update was lost."
+          }
+        },
+        {
+          "key": "walk",
+          "kind": "steps",
+          "payload": {
+            "title": "stock = 5, two concurrent decrements",
+            "intro": "The stock questions in this module are this diagram in code. `$product->stock -= 1; $product->save();` is a read-modify-write split across two statements:",
+            "steps": [
+              {
+                "title": "Request A reads the row",
+                "text": "A runs the SELECT and gets `stock = 5` into memory.",
+                "state": "A: stock = 5"
+              },
+              {
+                "title": "Request B reads the same row",
+                "text": "B's SELECT also returns 5 — A has not written anything yet.",
+                "state": "B: stock = 5"
+              },
+              {
+                "title": "A writes and commits",
+                "text": "A computes 5 - 1 = 4 and saves. The row now says 4.",
+                "state": "row: 4"
+              },
+              {
+                "title": "B writes from its stale copy",
+                "text": "B still holds 5 in memory, computes 4 and saves over A's committed 4.",
+                "state": "row: 4 — one decrement lost"
+              }
+            ]
+          }
+        },
+        {
+          "key": "shapes-table",
+          "kind": "table",
+          "payload": {
+            "title": "The two shapes in Laravel code",
+            "headers": [
+              "Shape",
+              "Typical code",
+              "What goes wrong"
+            ],
+            "rows": [
+              [
+                "Read-modify-write",
+                "`$product->stock -= 1; $product->save();`",
+                "read and write are separate statements; two requests both compute from the same stale value"
+              ],
+              [
+                "Check-then-act",
+                "`if ($product->stock > 0) { $product->stock--; ... }`",
+                "both requests pass the check while stock is still 1, then both decrement"
+              ],
+              [
+                "Unlocked read, delayed write",
+                "`find()` now, `decrement()` after slow work",
+                "the check-then-act gap stretched across time or across requests"
+              ]
+            ],
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "where",
+          "kind": "prose",
+          "payload": {
+            "text": "Name the transport and the interviewer knows you have shipped this:\n\n- **HTTP double-submit** — a double-click or a network retry delivers the same request twice, sometimes concurrently.\n- **Queue redelivery** — at-least-once transports can deliver one job twice, even while the first copy is still running.\n- **Retries** — a failed request or job is re-run; the retry must not replay the side effect.\n- **Long-lived human edits** — two admins edit one record over minutes; the last save silently wins.\n\nEach of these gets a dedicated lesson later in the module; the two shapes are the shared vocabulary."
+          }
+        },
+        {
+          "key": "why",
+          "kind": "callout",
+          "payload": {
+            "tone": "why",
+            "title": "One sentence that opens any concurrency answer",
+            "text": "The module's hardest scenario says it best: **any design that reads availability and later writes the booking based on that read can oversell unless the read and the write are made atomic with respect to other bookers.** Once you can say that, the fix discussion writes itself — atomic statements, transactions, row locks, version columns, idempotency keys."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "transactions-and-acid",
+      "title": "Transactions and ACID: why DB::transaction is the crash answer",
+      "summary": "An order flow inserts a row, deducts stock and charges a customer — then the server crashes halfway. ACID explains why none of the partial work survives, and Laravel's DB::transaction encodes that guarantee in a closure. This lesson also covers the savepoint behaviour of nested DB::transaction calls.",
+      "minutes": 9,
+      "difficulty": "easy",
+      "tags": [
+        "ACID",
+        "transactions",
+        "atomicity",
+        "DB::transaction",
+        "nested transactions",
+        "savepoints"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "An order flow inserts an order row, deducts stock and charges the customer inside one database transaction. Halfway through, the server crashes and the connection dies. When the server comes back, there is no order row, the customer was never charged, and the stock deduction is not visible to anyone.\n\nThe quiz asks which ACID property explains this. The deeper point: the database did not forget the work — it **rolled it back**, and understanding the difference is the whole lesson."
+          }
+        },
+        {
+          "key": "crash",
+          "kind": "heading",
+          "title": "The crash: atomicity in action"
+        },
+        {
+          "key": "crash-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "What happens before, during and after the crash",
+            "steps": [
+              {
+                "title": "BEGIN — a unit starts",
+                "text": "The three statements (order insert, stock deduction, charge) are now part of one unit.",
+                "state": "transaction open"
+              },
+              {
+                "title": "Statements run, uncommitted",
+                "text": "Each statement modifies rows, but nothing is durable yet — and no other transaction can see the changes.",
+                "state": "changes uncommitted"
+              },
+              {
+                "title": "Crash before COMMIT",
+                "text": "Recovery finds an open transaction with no commit and rolls back every statement, using the undo log's before-images of the changed rows.",
+                "state": "all effects undone"
+              },
+              {
+                "title": "After restart",
+                "text": "No order row, no charge, stock restored — all-or-nothing. Atomicity is exactly this.",
+                "state": "clean pre-transaction state"
+              }
+            ]
+          }
+        },
+        {
+          "key": "acid",
+          "kind": "heading",
+          "title": "The four ACID properties"
+        },
+        {
+          "key": "acid-table",
+          "kind": "table",
+          "payload": {
+            "title": "ACID — what each letter promises",
+            "headers": [
+              "Property",
+              "Promise",
+              "Role in the crash scenario"
+            ],
+            "rows": [
+              [
+                "Atomicity",
+                "all-or-nothing: partial effects of an uncommitted transaction are rolled back",
+                "the mechanism that erased the partial work"
+              ],
+              [
+                "Consistency",
+                "the database never moves from a valid state to an invalid one (constraints, foreign keys, checks)",
+                "not the mechanism — no constraint was violated, the transaction simply never finished"
+              ],
+              [
+                "Isolation",
+                "concurrent transactions cannot observe each other's uncommitted changes",
+                "not involved — a crash is not a question of concurrency visibility"
+              ],
+              [
+                "Durability",
+                "once COMMIT succeeds, the effects survive a crash",
+                "never engaged here — the commit never happened"
+              ]
+            ],
+            "mono": [
+              0
+            ],
+            "note": "The nuance that separates senior answers: had the transaction committed and THEN the server crashed, durability would have guaranteed the charge survived via the redo log. Because the commit never happened, atomicity did the work."
+          }
+        },
+        {
+          "key": "laravel",
+          "kind": "heading",
+          "title": "Laravel: DB::transaction"
+        },
+        {
+          "key": "tx-code",
+          "kind": "code",
+          "payload": {
+            "code": "DB::transaction(function () use ($productId, $qty) {\n    $order = Order::create(['product_id' => $productId, 'qty' => $qty]);\n\n    $product = Product::findOrFail($productId);\n    $product->decrement('stock', $qty);\n});",
+            "title": "The order flow as a closure — commit on return, rollback on throw",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "tx-semantics",
+          "kind": "prose",
+          "payload": {
+            "text": "When the closure returns normally, Laravel COMMITs. When it throws, Laravel ROLLBACKs and **rethrows** — a `catch` around the call sees the exception only after the rollback already happened. Symfony's DBAL `Connection::transactional()` behaves the same way.\n\nRaw PDO does none of this automatically: if you catch an exception and keep going, or simply forget the COMMIT, you silently leak an open transaction. That is exactly why both frameworks provide the helper."
+          }
+        },
+        {
+          "key": "tx-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "An exception does not always mean total rollback",
+            "text": "Everything is rolled back only when the exception escapes the OUTERMOST `DB::transaction()` closure. An exception caught inside the closure leaves the transaction open and usable — which matters the moment you nest transactions (next part)."
+          }
+        },
+        {
+          "key": "nested",
+          "kind": "heading",
+          "title": "Nesting DB::transaction: savepoints, not nested transactions"
+        },
+        {
+          "key": "nested-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Calling `DB::transaction()` inside another does NOT open a second physical transaction. Laravel keeps a per-connection transaction counter: the first call issues a real `BEGIN` (level 0 → 1); a nested call bumps the counter (1 → 2) and issues a `SAVEPOINT` named `trans2` (savepoints are enabled by default for MySQL). When the inner closure throws, Laravel rolls back to that savepoint — undoing only the inner block's changes — and rethrows. Because you catch the rethrow inside the outer closure, the outer transaction stays alive and can commit its remaining work."
+          }
+        },
+        {
+          "key": "levels-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "The counter vs the physical transaction",
+            "steps": [
+              {
+                "title": "Outer DB::transaction",
+                "text": "Issues BEGIN. Counter 0 → 1.",
+                "state": "level 1 · one physical transaction"
+              },
+              {
+                "title": "Inner DB::transaction",
+                "text": "Counter 1 → 2; issues SAVEPOINT trans2. Still one physical transaction.",
+                "state": "level 2 · savepoint trans2"
+              },
+              {
+                "title": "Inner throws, you catch it inside the outer closure",
+                "text": "Laravel rolls back to the savepoint, then rethrows; your catch swallows it. Only the inner block's changes are undone.",
+                "state": "level 1 · inner changes undone"
+              },
+              {
+                "title": "Outer closure finishes",
+                "text": "COMMIT publishes everything — the outer work plus whatever the inner block kept before its savepoint rollback.",
+                "state": "level 0 · committed"
+              }
+            ]
+          }
+        },
+        {
+          "key": "savepoint-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "Savepoint changes are still one physical transaction",
+            "text": "The inner block's surviving changes become visible to other transactions only when the OUTER COMMIT runs — and they disappear entirely if the outer transaction rolls back later. Developers who think of nested transactions as isolated units get burned exactly here. Framework difference to mention: Doctrine/DBAL does not auto-manage nesting the same way — re-entrant beginTransaction needs savepoint support enabled, and the ORM documentation warns against manual nested handling; Symfony Messenger's doctrine_transaction middleware keeps a single transaction per handled message."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "isolation-levels-anomalies",
+      "title": "Isolation levels: engine defaults and the three read anomalies",
+      "summary": "The same PHP code returns different data depending on the engine and its isolation level: MySQL/InnoDB defaults to REPEATABLE READ while PostgreSQL defaults to READ COMMITTED. This lesson maps the three anomalies — dirty read, non-repeatable read, phantom read — onto the levels, and shows where InnoDB is stricter than the SQL standard.",
+      "minutes": 10,
+      "difficulty": "medium",
+      "tags": [
+        "isolation levels",
+        "transactions",
+        "MySQL",
+        "InnoDB",
+        "defaults",
+        "dirty read",
+        "non-repeatable read",
+        "phantom read",
+        "MVCC",
+        "gap locks",
+        "trap question"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Four of the module's questions are isolation questions, and three of them are traps. The pattern behind all of them: developers reason about isolation without naming the database. MySQL/InnoDB and PostgreSQL implement the same four levels differently — so 'does this anomaly happen here?' has no answer until you say which engine, at which level, is running."
+          }
+        },
+        {
+          "key": "defaults",
+          "kind": "heading",
+          "title": "The default you are probably running"
+        },
+        {
+          "key": "defaults-text",
+          "kind": "prose",
+          "payload": {
+            "text": "- **MySQL/InnoDB defaults to REPEATABLE READ.** The classic trap: PostgreSQL defaults to READ COMMITTED, so developers whose muscle memory is PostgreSQL confidently answer READ COMMITTED.\n\nLaravel does not force an isolation level — your connections run at the server default unless you pin it, e.g. with `DB::statement('SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED')` on connection setup. Doctrine DBAL lets you configure a connection-level default but never changes it silently. The same PHP code can therefore behave differently on the two databases unless the level is pinned explicitly."
+          }
+        },
+        {
+          "key": "defaults-table",
+          "kind": "table",
+          "payload": {
+            "title": "Engine defaults at a glance",
+            "headers": [
+              "Database",
+              "Default level",
+              "What it means for your reads"
+            ],
+            "rows": [
+              [
+                "MySQL / InnoDB",
+                "`REPEATABLE READ`",
+                "plain SELECTs inside one transaction read from the snapshot taken at the first read"
+              ],
+              [
+                "PostgreSQL",
+                "`READ COMMITTED`",
+                "each statement gets a fresh snapshot — a row can change between two SELECTs in one transaction"
+              ],
+              [
+                "Laravel / Doctrine",
+                "server default",
+                "the framework never changes it silently; pin it only when the code requires it"
+              ]
+            ],
+            "mono": [
+              1
+            ],
+            "note": "The trade-off to name in an interview: READ COMMITTED gives better concurrency with statement-level snapshots; REPEATABLE READ is safer for read-then-act logic; SERIALIZABLE is reserved for the rare cases where phantoms matter more than throughput."
+          }
+        },
+        {
+          "key": "anomalies",
+          "kind": "heading",
+          "title": "The three anomalies"
+        },
+        {
+          "key": "anomalies-text",
+          "kind": "prose",
+          "payload": {
+            "text": "- **Dirty read** — reading a row written by a transaction that has NOT committed, so the data may still be rolled back. Possible only at READ UNCOMMITTED.\n- **Non-repeatable read** — the SAME row read twice in one transaction returns different values, because another transaction committed an update in between. Allowed at READ COMMITTED.\n- **Phantom read** — the same RANGE query returns a different row set, because another transaction inserted rows in between. Allowed at REPEATABLE READ per the SQL standard.\n\nA **lost update** is a different beast — two transactions both read a value, both write, and the last write silently discards the first. Isolation does not fix it; locking or an atomic statement does, which is why those get their own lessons."
+          }
+        },
+        {
+          "key": "matrix",
+          "kind": "table",
+          "payload": {
+            "title": "Anomalies vs isolation levels (SQL standard)",
+            "headers": [
+              "Anomaly",
+              "READ UNCOMMITTED",
+              "READ COMMITTED",
+              "REPEATABLE READ",
+              "SERIALIZABLE"
+            ],
+            "rows": [
+              [
+                "Dirty read",
+                "possible",
+                "prevented",
+                "prevented",
+                "prevented"
+              ],
+              [
+                "Non-repeatable read",
+                "possible",
+                "possible",
+                "prevented",
+                "prevented"
+              ],
+              [
+                "Phantom read",
+                "possible",
+                "possible",
+                "possible per standard",
+                "prevented"
+              ],
+              [
+                "Lost update",
+                "possible",
+                "possible",
+                "possible",
+                "possible"
+              ]
+            ],
+            "mono": [
+              0
+            ],
+            "em": [
+              4
+            ],
+            "note": "Possible means the level PERMITS the anomaly, not that it always happens. InnoDB's REPEATABLE READ is stricter than the standard minimum (next part). A lost update is possible at every level when neither writer locks."
+          }
+        },
+        {
+          "key": "dirty",
+          "kind": "heading",
+          "title": "Dirty reads up close"
+        },
+        {
+          "key": "dirty-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The module's multi-select asks which statements about dirty reads are TRUE. The four that matter:\n\n- A dirty read means reading data written by a transaction that has not yet committed — data that may still be rolled back. You act on information that never officially existed; dangerous for anything financial.\n- READ COMMITTED and every higher level prevent dirty reads. InnoDB's MVCC makes this structural: a reader never blocks on a writer and never sees uncommitted versions.\n- MySQL's default is REPEATABLE READ — and READ UNCOMMITTED is the level that PERMITS dirty reads. It exists for throughput at the price of correctness, never as a safety mechanism.\n- A dirty read and a non-repeatable read are two different anomalies: uncommitted data vs a committed value that changed mid-transaction."
+          }
+        },
+        {
+          "key": "nrr",
+          "kind": "heading",
+          "title": "Non-repeatable read at READ COMMITTED"
+        },
+        {
+          "key": "nrr-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "price = 100 → 110, one transaction, two reads",
+            "intro": "The MySQL instance's isolation was lowered to READ COMMITTED (also PostgreSQL's default).",
+            "steps": [
+              {
+                "title": "Transaction A reads the product",
+                "text": "A's SELECT returns `price = 100`.",
+                "state": "A sees 100"
+              },
+              {
+                "title": "Transaction B updates and commits",
+                "text": "B changes the row to `price = 110` and commits. A is still open and unaware.",
+                "state": "row is 110, committed"
+              },
+              {
+                "title": "A reads the same row again",
+                "text": "At READ COMMITTED each statement gets a fresh snapshot, so A sees 110 — a non-repeatable read. Note it is NOT a dirty read: B committed before A's second read.",
+                "state": "A sees 110"
+              }
+            ]
+          }
+        },
+        {
+          "key": "engine-nuance",
+          "kind": "prose",
+          "payload": {
+            "text": "Now the senior-level twist: on MySQL at its default REPEATABLE READ, this exact scenario would NOT produce a non-repeatable read. InnoDB snapshot reads inside one transaction all read from the same snapshot, so A's second SELECT would still return 100. On PostgreSQL — and on MySQL configured to READ COMMITTED — it happens exactly as described. The answer depends on the engine AND its configured level, which is why you never reason about isolation without naming the database."
+          }
+        },
+        {
+          "key": "phantom",
+          "kind": "heading",
+          "title": "Phantoms: where InnoDB beats the standard"
+        },
+        {
+          "key": "phantom-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The senior developer in the quiz is right about the SQL standard — it says REPEATABLE READ may allow phantoms and only SERIALIZABLE must prevent them. They are wrong about InnoDB, which is stricter than the standard's minimum. Two mechanisms do it:\n\n- Plain SELECTs are MVCC snapshot reads: within one transaction they always return the same row set, regardless of what other transactions commit.\n- Locking reads (`SELECT ... FOR UPDATE` / `FOR SHARE`) over a range use **next-key locks** — a record lock plus a gap lock on the index range — which block other transactions from INSERTing into that gap until the lock holder commits."
+          }
+        },
+        {
+          "key": "gap-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "How a locking range read stops phantoms",
+            "steps": [
+              {
+                "title": "A locks the range",
+                "text": "A runs a locking range read, e.g. `SELECT * FROM orders WHERE status = 'open' FOR UPDATE`. InnoDB locks the matching records and the gaps around them.",
+                "state": "record + gap locked"
+              },
+              {
+                "title": "B tries to insert into the gap",
+                "text": "B's INSERT into the locked range blocks until A commits or rolls back.",
+                "state": "B waits"
+              },
+              {
+                "title": "A commits",
+                "text": "A's locks release and B's insert proceeds — but A's transaction never observed the phantom row.",
+                "state": "no phantom observed"
+              }
+            ]
+          }
+        },
+        {
+          "key": "snapshot-nuance",
+          "kind": "prose",
+          "payload": {
+            "text": "The word that matters is **locking**. A NON-locking range read can return fewer rows than a later locking read would see, because the snapshot was taken before another transaction committed its inserts — snapshot reads are stable, not current. If you need to re-scan and see everything that has committed since your snapshot, use locking reads (or raise the isolation level)."
+          }
+        },
+        {
+          "key": "serializable",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "Why SERIALIZABLE is slow — not magical",
+            "text": "InnoDB's SERIALIZABLE takes the standard literally by implicitly converting plain SELECTs into locking reads (`SELECT ... LOCK IN SHARE MODE`). That conversion is why it is slow and deadlock-prone — it does not add a new protection, it makes every read a lock. Reserve it for the rare cases where phantoms matter more than throughput."
+          }
+        },
+        {
+          "key": "gap-cost",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "Gap locks are a deadlock source",
+            "text": "A locking read or plain UPDATE with a range predicate — or an UNINDEXED predicate, which can lock the whole table's gap — makes unrelated INSERTs into that range block. A Laravel `where(...)->lockForUpdate()` or a Doctrine query using `PESSIMISTIC_WRITE` over a range inherits these semantics, so keep predicates precise and index-backed."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "pessimistic-locks-and-deadlocks",
+      "title": "Pessimistic locks: FOR UPDATE traps, MVCC readers and deadlocks",
+      "summary": "Three hard questions punish one wrong mental model: that a row lock freezes the row or lives as long as the PHP variable holding the model. Locks actually live until the transaction ends, MVCC readers ignore them, and only lock-respecting traffic is coordinated — misuse ends in deadlocks (MySQL 1213) and lost updates.",
+      "minutes": 10,
+      "difficulty": "hard",
+      "tags": [
+        "pessimistic locking",
+        "pessimistic-locking",
+        "lockForUpdate",
+        "locking",
+        "MVCC",
+        "deadlock",
+        "retry",
+        "transactions",
+        "trap question"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Three of the module's hardest questions are pessimistic-locking questions, and all three punish the same wrong mental model: that a row lock freezes the row for everyone, that the lock lives as long as the PHP variable holding the model, or that taking a lock is enough on its own. The reality is precise: locks live until the transaction ends, MVCC readers ignore them, and only lock-respecting traffic is coordinated."
+          }
+        },
+        {
+          "key": "lifetime",
+          "kind": "heading",
+          "title": "FOR UPDATE locks until COMMIT or ROLLBACK"
+        },
+        {
+          "key": "lifetime-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`SELECT ... FOR UPDATE` acquires an exclusive row lock in InnoDB, released when the TRANSACTION ends — COMMIT or ROLLBACK — not when the statement or the request finishes. That sentence is the whole trap question. With autocommit enabled (the default outside an explicit transaction), every statement is its own transaction: `SELECT ... FOR UPDATE` takes the lock and releases it the moment the statement completes."
+          }
+        },
+        {
+          "key": "autocommit-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "Moving the locked read outside the transaction",
+            "intro": "A colleague moves `lockForUpdate()` out of any transaction, arguing that locking the row is all that matters:",
+            "steps": [
+              {
+                "title": "The 'optimized' read",
+                "text": "`Product::where('id', $id)->lockForUpdate()->first()` runs under autocommit, so the SELECT is its own implicit transaction.",
+                "state": "lock acquired"
+              },
+              {
+                "title": "Statement ends = commit",
+                "text": "Autocommit commits the implicit transaction immediately — the row lock is gone before your next statement runs.",
+                "state": "lock released"
+              },
+              {
+                "title": "The write runs unprotected",
+                "text": "The later decrement executes with no lock held; another request can decrement in between — the exact lost-update or oversell race the lock was meant to prevent.",
+                "state": "race is back"
+              }
+            ]
+          }
+        },
+        {
+          "key": "correct-code",
+          "kind": "code",
+          "payload": {
+            "code": "DB::transaction(function () use ($id, $qty) {\n    // 1. lock the row; a competing request BLOCKS here until we commit\n    $product = Product::where('id', $id)->lockForUpdate()->first();\n\n    // 2. re-validate against the locked, fresh read\n    if ($product->stock < $qty) {\n        abort(409, 'Not enough stock');\n    }\n\n    $product->decrement('stock', $qty);\n});",
+            "title": "The correct shape — the lock must cover the read AND the write",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "compile-notes",
+          "kind": "prose",
+          "payload": {
+            "text": "`lockForUpdate()` compiles to `... FOR UPDATE`; `sharedLock()` compiles to `... FOR SHARE`. Inside the transaction, concurrent writers on the same row serialize: the second request blocks at the SELECT until the first commits, then reads the updated value.\n\nDoctrine mirrors this — `LockMode::PESSIMISTIC_WRITE` issues `SELECT ... FOR UPDATE` and only makes sense inside an active transaction; Doctrine documents that pessimistic locks require one. Related trap: a `lockForUpdate()` on a query that is never executed, or a lazy relationship loaded after the lock scope ends, silently gives you nothing. The lock exists only while the transaction that took it is still open."
+          }
+        },
+        {
+          "key": "mvcc",
+          "kind": "heading",
+          "title": "MVCC: locked rows do not block plain reads"
+        },
+        {
+          "key": "mvcc-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Transaction A runs `SELECT * FROM products WHERE id = 42 FOR UPDATE` and holds the row lock. Transaction B then runs a plain, NON-locking `SELECT` on the same row, on the same InnoDB instance at its default REPEATABLE READ. What happens to B?\n\nB reads the row **immediately**. InnoDB consistent (snapshot) reads never wait on row locks: they read from a snapshot and see the last committed version. B cannot see A's uncommitted value either — that would be a dirty read, impossible at REPEATABLE READ (and even at READ COMMITTED). Only locking reads and writes contend on the row lock."
+          }
+        },
+        {
+          "key": "stale-write-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "Why this is a trap for B's author",
+            "steps": [
+              {
+                "title": "B reads with a plain SELECT",
+                "text": "B gets the last committed price — say 100 — from its snapshot, ignoring that A holds the lock.",
+                "state": "B reads 100"
+              },
+              {
+                "title": "B writes based on that read",
+                "text": "B's UPDATE is a write, so it blocks until A commits.",
+                "state": "B's write waits for A"
+              },
+              {
+                "title": "B writes stale data",
+                "text": "After A commits, B writes based on the value it read long ago — silently discarding A's change. A lost update from plain read + write.",
+                "state": "A's change overwritten"
+              }
+            ]
+          }
+        },
+        {
+          "key": "mvcc-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "Locks coordinate only those who respect them",
+            "text": "The rule to state: **pessimistic locks serialize writers and lock-respecting readers; snapshot readers are unaffected — never assume a lock froze the data for everyone.** If your flow reads then writes, the guarded re-reads must be locking reads inside the same transaction. Doctrine's docs say the same: re-read an entity after acquiring a pessimistic lock."
+          }
+        },
+        {
+          "key": "deadlock",
+          "kind": "heading",
+          "title": "Deadlocks: circular waits, error 1213"
+        },
+        {
+          "key": "deadlock-text",
+          "kind": "prose",
+          "payload": {
+            "text": "A deadlock is a circular wait: transaction 1 holds a lock transaction 2 needs, while transaction 2 holds a lock transaction 1 needs. InnoDB detects the cycle and rolls back one victim — MySQL error 1213, SQLSTATE 40001 — or times a waiter out with error 1205 (lock wait timeout). Laravel surfaces these as a `QueryException` whose previous exception is the `PDOException` carrying 1213 or 1205."
+          }
+        },
+        {
+          "key": "reducers",
+          "kind": "table",
+          "payload": {
+            "title": "What genuinely reduces deadlock FREQUENCY",
+            "headers": [
+              "Practice",
+              "Why it works"
+            ],
+            "rows": [
+              [
+                "Lock rows in a consistent global order",
+                "e.g. always ascending primary-key order. If every transaction takes locks in the same order, no transaction can hold a later lock while waiting for an earlier one — a circular wait becomes impossible"
+              ],
+              [
+                "Keep transactions short",
+                "do HTTP calls, file I/O and expensive computation BEFORE opening the transaction. Holding a DB transaction open across a payment-provider call is a deadlock factory"
+              ],
+              [
+                "Narrow, index-backed statements",
+                "fewer locked rows means fewer record locks and, under REPEATABLE READ, fewer gap locks — smaller chance that two lock sets overlap"
+              ]
+            ],
+            "mono": [
+              0
+            ],
+            "note": "The real cure is fixing the ORDERING, not just retrying: inspect `SHOW ENGINE INNODB STATUS` or the `innodb_deadlocks` table to see the victim and the lock sequences."
+          }
+        },
+        {
+          "key": "wrong-fixes",
+          "kind": "prose",
+          "payload": {
+            "text": "Two popular 'fixes' from the quiz do NOT reduce frequency:\n\n- **READ UNCOMMITTED does not remove write locks.** INSERT/UPDATE/DELETE always take exclusive locks regardless of isolation — and the level introduces dirty reads. A correctness trade, not a deadlock fix.\n- **Retrying is a mitigation, not a frequency reducer.** It converts occasional deadlocks into invisible successes but does nothing to stop them occurring."
+          }
+        },
+        {
+          "key": "attempts-code",
+          "kind": "code",
+          "payload": {
+            "code": "try {\n    DB::transaction(function () {\n        // the whole critical section: lock, re-validate, write\n    }, 5);   // re-execute up to 5 times on deadlock / lock-wait timeout\n} catch (QueryException $e) {\n    // $e->getPrevious() is the PDOException: error 1213 (deadlock) or 1205 (lock wait)\n    report($e);\n}",
+            "title": "Laravel retries deadlocks for you",
+            "caption": "The second argument to DB::transaction is the number of attempts (default 1 = no retry); the closure is re-executed when the failure is a deadlock or lock-wait timeout.",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "doctrine-note",
+          "kind": "prose",
+          "payload": {
+            "text": "Symfony/Doctrine has no built-in retry: after a deadlock, Doctrine closes the EntityManager, so you must discard it, rebuild one, and retry the whole unit of work — a classic Symfony gotcha. Retry only transient database errors; never silently retry a business decision such as a 409."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "optimistic-locking-and-conflicts",
+      "title": "Optimistic locking: version columns, stale saves and merge conflicts",
+      "summary": "Two admins edit one product over fifteen minutes and the last save silently wipes the first. The fix is optimistic locking: a version column plus a compare-and-swap write that refuses stale saves atomically. This lesson walks the Eloquent and Doctrine implementations, the UI reaction, and the is_stale and has_conflict drills that model the merge decision.",
+      "minutes": 10,
+      "difficulty": "medium",
+      "tags": [
+        "optimistic locking",
+        "optimistic-locking",
+        "version column",
+        "versioning",
+        "lockVersion",
+        "Doctrine @Version",
+        "lost update",
+        "merge",
+        "conflict-detection",
+        "debugging",
+        "transactions"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Two admins edit the same product through a long-lived form. Admin A saves after fifteen minutes; Admin B, who loaded the page before A's save, saves one minute later and silently overwrites A's changes. No locks, no error — A's work just vanishes. That is a lost update, and the standard fix is optimistic locking: a version column plus a compare-and-swap write. The module's optimistic drills — `is_stale` and `has_conflict` — test exactly the pieces of that mechanism."
+          }
+        },
+        {
+          "key": "why-isolation",
+          "kind": "heading",
+          "title": "Why isolation cannot fix this"
+        },
+        {
+          "key": "why-isolation-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Isolation level alone does not prevent last-writer-wins: READ COMMITTED and REPEATABLE READ both allow lost updates when neither writer takes a lock. The write that clobbers A's row is a perfectly ordinary committed UPDATE — no anomaly rule excludes two writers overwriting each other. You need explicit concurrency control: optimistic (this lesson) or pessimistic (the previous one)."
+          }
+        },
+        {
+          "key": "cas",
+          "kind": "heading",
+          "title": "The compare-and-swap write"
+        },
+        {
+          "key": "cas-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Add an integer `version` column to the row. Every save becomes `UPDATE ... SET version = version + 1 WHERE id = ? AND version = <the version you read>`. When another writer already bumped the version, your UPDATE matches **zero rows** — your write is refused atomically, and the row is NOT modified. That refusal, not a friendly message, is the guarantee."
+          }
+        },
+        {
+          "key": "cas-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "The CAS in motion",
+            "steps": [
+              {
+                "title": "A loads the product",
+                "text": "A reads the row with version = 5 and opens its 15-minute editing session.",
+                "state": "A holds expected = 5"
+              },
+              {
+                "title": "A saves",
+                "text": "A's UPDATE sets version = 6 WHERE version = 5. One row affected, committed.",
+                "state": "version is now 6"
+              },
+              {
+                "title": "B saves with its stale version",
+                "text": "B still expects 5. Its UPDATE ... WHERE version = 5 matches nothing, because the row is already at 6.",
+                "state": "0 rows affected → conflict"
+              }
+            ]
+          }
+        },
+        {
+          "key": "eloquent-code",
+          "kind": "code",
+          "payload": {
+            "code": "$updated = DB::table('products')\n    ->where('id', $id)\n    ->where('version', $expectedVersion)\n    ->update([\n        'name' => $name,\n        'price' => $price,\n        'version' => $expectedVersion + 1,\n    ]);\n\nif ($updated === 0) {\n    throw new ProductConflictException('Someone else saved this product first');\n}",
+            "title": "Eloquent has no built-in optimistic locking — do the CAS yourself",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "doctrine",
+          "kind": "heading",
+          "title": "Doctrine: the ORM manages the version"
+        },
+        {
+          "key": "doctrine-code",
+          "kind": "code",
+          "payload": {
+            "code": "use Doctrine\\ORM\\Mapping as ORM;\n\n#[ORM\\Entity]\nclass Product\n{\n    #[ORM\\Id]\n    #[ORM\\Column(type: 'integer')]\n    private int $id;\n\n    #[ORM\\Version]\n    #[ORM\\Column(type: 'integer')]\n    private int $version = 1;\n}",
+            "title": "@ORM\\Version on an integer column",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "doctrine-text",
+          "kind": "prose",
+          "payload": {
+            "text": "With `#[ORM\\Version]`, Doctrine automatically appends `AND version = ?` to the UPDATE and increments the version on every flush. When the WHERE fails, `flush()` throws `Doctrine\\ORM\\OptimisticLockException` — message like 'The optimistic lock on an entity failed'. For an early check you can also call `$em->lock($product, LockMode::OPTIMISTIC, $expectedVersion)` before flushing. Either way the loser's write is refused atomically, exactly like the Eloquent CAS."
+          }
+        },
+        {
+          "key": "ui",
+          "kind": "heading",
+          "title": "How the UI should react"
+        },
+        {
+          "key": "ui-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Never silently retry the write with the stale payload — a retry of the same data overwrites A's changes again, which is the bug you are fixing. Instead:\n\n- Reload the current row — now version N+1, containing A's changes.\n- Tell the user their save conflicted.\n- Offer a choice: review A's changes and merge (the `has_conflict` drill below is this merge decision), or consciously force-overwrite — which must re-run the CAS against the newest version, not skip it."
+          }
+        },
+        {
+          "key": "when-pessimistic",
+          "kind": "heading",
+          "title": "When pessimistic locking is the right tool"
+        },
+        {
+          "key": "when-pessimistic-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Pessimistic locking wins when conflicts are frequent or expensive and the critical section is SHORT — milliseconds, machine-to-machine, inside one request, like booking the last ticket. It is the wrong tool for a 15-minute human edit: the row lock would be held across the whole editing session, blocking every other writer, risking lock-wait timeouts and deadlocks, and tying up a connection. That is why Fowler's Pessimistic Offline Lock pattern locks a separate lock record — never the business row — when the lock must outlive a transaction.\n\nDecision rule to quote: **conflicts rare / reads dominate / long human sessions → optimistic; conflicts frequent / short critical section / retry is costly or unsafe → pessimistic.**"
+          }
+        },
+        {
+          "key": "drills",
+          "kind": "heading",
+          "title": "The drills: staleness and 3-way conflicts"
+        },
+        {
+          "key": "is-stale-code",
+          "kind": "code",
+          "payload": {
+            "code": "function is_stale(int $expectedVersion, int $currentVersion): bool\n{\n    return $expectedVersion !== $currentVersion;\n}",
+            "title": "is_stale — the refusal condition in one expression",
+            "lang": "php",
+            "caption": "Dojo checks: is_stale(3, 3) is false (still fresh), is_stale(3, 4) is true (another writer bumped the version), is_stale(2, 7) is true, is_stale(1, 1) is false."
+          }
+        },
+        {
+          "key": "merge-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`has_conflict($base, $theirs, $ours)` models the merge decision: `$base` is the original state, `$theirs` and `$ours` are two concurrent edits of it. There is a conflict only when at least one key was changed by BOTH sides — their values differ from base — AND the two new values differ from each other. A key missing from an array counts as `null`."
+          }
+        },
+        {
+          "key": "merge-table",
+          "kind": "table",
+          "payload": {
+            "title": "When is there a conflict?",
+            "headers": [
+              "$base",
+              "$theirs",
+              "$ours",
+              "has_conflict"
+            ],
+            "rows": [
+              [
+                "`['a' => 1]`",
+                "`['a' => 2]`",
+                "`['a' => 1]`",
+                "false — only theirs changed"
+              ],
+              [
+                "`['a' => 1]`",
+                "`['a' => 2]`",
+                "`['a' => 2]`",
+                "false — both made the same change"
+              ],
+              [
+                "`['a' => 1]`",
+                "`['a' => 2]`",
+                "`['a' => 3]`",
+                "**true** — same key, different values"
+              ],
+              [
+                "`[]`",
+                "`['a' => 1]`",
+                "`[]`",
+                "false — only one side added the key"
+              ]
+            ],
+            "mono": [
+              3
+            ]
+          }
+        },
+        {
+          "key": "merge-code",
+          "kind": "code",
+          "payload": {
+            "code": "function has_conflict(array $base, array $theirs, array $ours): bool\n{\n    $keys = array_unique(array_merge(\n        array_keys($base),\n        array_keys($theirs),\n        array_keys($ours),\n    ));\n\n    foreach ($keys as $k) {\n        $b = $base[$k] ?? null;\n        $t = $theirs[$k] ?? null;\n        $o = $ours[$k] ?? null;\n\n        if ($t !== $b && $o !== $b && $t !== $o) {\n            return true;\n        }\n    }\n\n    return false;\n}",
+            "title": "The three conditions in one if",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "merge-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "The debug twin drops exactly one condition",
+            "text": "The module's debug sibling checks `$t !== $b && $o !== $b` but forgets `$t !== $o`. Result: two sides that independently made the SAME change (`['a' => 2]` vs `['a' => 2]`) are reported as a conflict — the merge wrongly refuses an edit it could auto-apply. When both sides differ from base but agree with each other, there is nothing to merge; `$t !== $o` is what separates 'same edit twice' from a real conflict."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "atomic-updates-and-overselling",
+      "title": "Overselling: the atomic conditional UPDATE and when to lock instead",
+      "summary": "The module's flagship scenario: an event has two seats left and ten requests race to book one each — the last two must win, the rest must get a clean sold out. This lesson builds the strongest fix first, a single guarded atomic UPDATE, then compares it with pessimistic locking, optimistic versioning and queue serialization for the booking case.",
+      "minutes": 10,
+      "difficulty": "hard",
+      "tags": [
+        "atomic updates",
+        "atomic-updates",
+        "increment",
+        "race condition",
+        "lost update",
+        "concurrency",
+        "transactions",
+        "queue",
+        "retry",
+        "idempotency"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The module's flagship scenario: an event has two seats left and ten requests race to book one each — the last two must win and the rest must get a clean 'sold out'. Its simpler sibling: decrement stock by one on every order, safely, under many concurrent requests. Both reduce to one idea: **make the guard and the write a single atomic statement, and check how many rows you really changed.**"
+          }
+        },
+        {
+          "key": "root-cause",
+          "kind": "prose",
+          "payload": {
+            "text": "Any design that reads availability and later writes the booking based on that read can oversell — the check-then-act shape from the first lesson. Two requests both see `stock > 0` while stock is still 1, both decrement, and the event is overbooked. Fixing it means closing the gap between the check and the act."
+          }
+        },
+        {
+          "key": "atomic",
+          "kind": "heading",
+          "title": "A single UPDATE is already atomic"
+        },
+        {
+          "key": "atomic-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`UPDATE products SET stock = stock - 1 WHERE id = ?` is ONE statement, so the database executes it under its internal row lock and concurrent executions are serialized at the statement level — in autocommit mode, with no explicit transaction and no application-level lock. No update is lost. The quiz's safe answer compiles to exactly this: `Product::where('id', $id)->decrement('stock');`"
+          }
+        },
+        {
+          "key": "options-table",
+          "kind": "table",
+          "payload": {
+            "title": "The four options from the quiz",
+            "headers": [
+              "Code",
+              "Safe alone?",
+              "Why"
+            ],
+            "rows": [
+              [
+                "`$p = Product::find($id); $p->stock -= 1; $p->save();`",
+                "**no**",
+                "read-modify-write: both requests read 5, both write 4"
+              ],
+              [
+                "`Product::where('id', $id)->decrement('stock');`",
+                "**yes**",
+                "one atomic `UPDATE products SET stock = stock - 1 WHERE id = ?`"
+              ],
+              [
+                "`...->lockForUpdate()->first(); $p->stock -= 1; $p->save();`",
+                "**no**",
+                "autocommit releases the lock when the SELECT ends — before save() runs"
+              ],
+              [
+                "`$p = Product::find($id); DB::table('products')->where('id', $id)->update([...]);`",
+                "**no**",
+                "the read still happens outside the atomic write — it races identically to option 1"
+              ]
+            ],
+            "mono": [
+              0
+            ],
+            "em": [
+              1
+            ],
+            "note": "Option B is safe on its own because a single statement cannot be interleaved with itself — the row lock, the read of stock and the write all happen inside one atomic operation."
+          }
+        },
+        {
+          "key": "guarded",
+          "kind": "heading",
+          "title": "Guard inside the same statement: no oversell"
+        },
+        {
+          "key": "guarded-code",
+          "kind": "code",
+          "payload": {
+            "code": "$booked = DB::transaction(function () use ($id, $qty) {\n    // the WHERE guard and the decrement are ONE statement\n    $affected = Product::query()\n        ->whereKey($id)\n        ->where('stock', '>=', $qty)\n        ->decrement('stock', $qty);\n\n    if ($affected === 0) {\n        return false;   // the DB re-checked the guard under the row lock — it failed\n    }\n\n    Order::create(['product_id' => $id, 'qty' => $qty]);\n\n    return true;\n});\n\nif ($booked === false) {\n    abort(409, 'Sold out');\n}",
+            "title": "The strongest fix needs no explicit lock at all",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "guarded-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The database re-evaluates `stock >= qty` under the row lock of the UPDATE itself, so the guard cannot be raced — the last unit can only ever be taken once. `decrement()` returns the number of affected rows: 1 means the unit was yours and you may create the order; 0 means the guard failed and you must refuse the sale. The transaction wraps the decrement and the order creation so they commit or roll back together."
+          }
+        },
+        {
+          "key": "caveats",
+          "kind": "prose",
+          "payload": {
+            "text": "Nuances worth quoting from the module:\n\n- An atomic UPDATE fixes a single-column invariant, NOT multi-step workflows — inserting a booking and decrementing stock still need a transaction, because a crash between the steps must not leave stock decremented with no booking.\n- Eloquent's `increment()`/`decrement()` do not run model events and do not return the new value — if you need it, re-read the row inside the same transaction.\n- Doctrine ORM has no increment helper: `$entity->setStock($entity->getStock() - 1)` + flush is a read-modify-write and races — use a partial DQL UPDATE or native SQL with the same `SET x = x - n` shape."
+          }
+        },
+        {
+          "key": "scenario",
+          "kind": "heading",
+          "title": "Two seats, ten requests: pick your concurrency control"
+        },
+        {
+          "key": "pessimistic",
+          "kind": "heading",
+          "title": "Pessimistic: serialize bookers on the event row"
+        },
+        {
+          "key": "pessimistic-code",
+          "kind": "code",
+          "payload": {
+            "code": "DB::transaction(function () use ($eventId, $userId, $qty) {\n    $event = Event::query()->whereKey($eventId)->lockForUpdate()->first();\n\n    if ($event->available_seats < $qty) {\n        abort(409, 'No seats left');\n    }\n\n    Booking::create(['event_id' => $eventId, 'user_id' => $userId]);\n    $event->decrement('available_seats', $qty);\n});",
+            "title": "The recommended shape for this exact case",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "pessimistic-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The `SELECT ... FOR UPDATE` queues concurrent bookers on the event row: request 2 blocks at the SELECT until request 1 commits, then reads the UPDATED availability (1 seat) and takes it; request 3 then sees 0 and gets the 409. Two rules keep it correct: (1) the availability check must run on data read AFTER the lock is acquired, inside the transaction — validating before `lockForUpdate()`, or on a value cached earlier, is meaningless; (2) keep the transaction tiny — no HTTP calls, no e-mail, no slow work between lock and commit."
+          }
+        },
+        {
+          "key": "optimistic",
+          "kind": "heading",
+          "title": "Optimistic: rare conflicts, re-read and retry"
+        },
+        {
+          "key": "optimistic-text",
+          "kind": "prose",
+          "payload": {
+            "text": "When the flow is a pure counter you do not even need a version column — the guarded atomic write above IS the optimistic booking: `...->where('available_seats', '>=', $qty)->decrement('available_seats', $qty)`, and 0 affected rows means another transaction already took the seats. When more than a counter is written (booking rows must be inserted atomically too), wrap everything in a transaction and use the version compare-and-swap from the optimistic lesson, checking affected rows. Losers re-read and retry the whole flow up to a limit.\n\nOptimistic locking shines when conflicts are RARE and reads dominate (a cart detail page): readers are never blocked and no lock waits are wasted. It hurts under high contention, because losers pay the cost of re-reading and retrying — and a naive retry with stale data reintroduces the overwrite bug."
+          }
+        },
+        {
+          "key": "queue",
+          "kind": "heading",
+          "title": "When the answer is a queue"
+        },
+        {
+          "key": "queue-text",
+          "kind": "prose",
+          "payload": {
+            "text": "If booking can be asynchronous — the response does not have to confirm instantly — serialize per event instead: route all bookings for one event to a single worker, guard the job with a per-event Redis lock, or claim work with `SELECT ... FOR UPDATE SKIP LOCKED` on a work-queue table. Queues also fit when the critical section is long or touches slow external systems.\n\nDecision rule to quote: **transaction for atomicity of a multi-step write, row lock when concurrent check-then-act on the same row must be serialized, cache or advisory lock when losing the race is acceptable, queue when work can be deferred and must be retried.**"
+          }
+        },
+        {
+          "key": "matrix",
+          "kind": "table",
+          "payload": {
+            "title": "Choosing for the two-seats case",
+            "headers": [
+              "Approach",
+              "Best when",
+              "Failure mode to handle"
+            ],
+            "rows": [
+              [
+                "Atomic conditional UPDATE",
+                "a pure counter guard (stock, seats)",
+                "0 affected rows → refuse; still wrap multi-step writes in a transaction"
+              ],
+              [
+                "Pessimistic row lock",
+                "short, synchronous, high-stakes check-then-act",
+                "deadlock 1213 / lock timeout 1205 → bounded retry, consistent lock order"
+              ],
+              [
+                "Optimistic versioning",
+                "conflicts rare, reads dominate, long sessions",
+                "0 rows affected → reload, merge or retry with a cap"
+              ],
+              [
+                "Queue serialization",
+                "work deferrable, long critical section, backpressure needed",
+                "at-least-once redelivery → the handler must be idempotent"
+              ]
+            ],
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "retry-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "danger",
+            "title": "Retry transients only — never the business 409",
+            "text": "`DB::transaction($callback, 5)` re-executes the closure on a deadlock (1213) or lock-wait timeout (1205) — it does not turn a sold-out answer into a booking. And whatever mechanism you choose, attach a unique idempotency key to each order so duplicate HTTP requests or queue redeliveries cannot book twice — the next lesson."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "idempotency-exactly-once",
+      "title": "Idempotency: exactly-once effects under double submits and redelivery",
+      "summary": "Double-clicks, network retries and at-least-once queue transports can deliver the same logical request twice — sometimes concurrently. The robust answer is a database unique index as the source of truth, with duplicate arrivals replayed instead of re-executed. This lesson covers the payments design, idempotent queue consumers and the exponential-backoff drill.",
+      "minutes": 10,
+      "difficulty": "hard",
+      "tags": [
+        "idempotency",
+        "double-submit",
+        "payments",
+        "unique constraint",
+        "duplicate processing",
+        "queue",
+        "retries",
+        "retry",
+        "exponential-backoff",
+        "defensive-coding",
+        "debugging",
+        "race condition",
+        "transactions"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Users double-click the 'Pay now' button, and a network retry can deliver the same logical request twice — possibly milliseconds apart, concurrently. Your payment provider charges once per API call. The endpoint must cause exactly one charge no matter how the duplicates arrive. That is the module's biggest open question, and its spine: **a database unique constraint is the source of truth; every other guard is an optimization.**"
+          }
+        },
+        {
+          "key": "design",
+          "kind": "heading",
+          "title": "An idempotency key owned by the client"
+        },
+        {
+          "key": "design-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The client generates an idempotency key once per logical payment attempt — a UUID, sent as an `Idempotency-Key` header or a `client_request_id` body field. The payments table carries a UNIQUE index on `(user_id, idempotency_key)`. The flow: validate, INSERT a row with `status = 'pending'` and that key, COMMIT, then call the provider.\n\nThe source of truth is the database unique index, never the cache:\n\n- A Redis-only guard (`Cache::add`, `SET NX` with a TTL) can lose — eviction, expiry or a Redis restart between the two duplicate requests — and then the second request charges again.\n- A SELECT-then-INSERT check lets both pass: two concurrent requests both see 'no row' before either commits.\n- Cache is an optimization layer, e.g. a short-lived `Cache::lock` to avoid wasted provider work — never the correctness guarantee."
+          }
+        },
+        {
+          "key": "race-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "Two identical requests, milliseconds apart",
+            "intro": "Both carry the same key K and reach the INSERT before either commits:",
+            "steps": [
+              {
+                "title": "Both try to INSERT",
+                "text": "Request 1 and request 2 each execute the same INSERT of (user, K, pending).",
+                "state": "both INSERT key K"
+              },
+              {
+                "title": "The unique index decides",
+                "text": "The database serializes the two INSERTs: exactly one succeeds and becomes the owner of the charge.",
+                "state": "one row inserted"
+              },
+              {
+                "title": "The loser gets a duplicate-key error",
+                "text": "MySQL error 1062, SQLSTATE 23000. Catch exactly that error, load the existing row by key and return its stored result — the loser turns into a reader.",
+                "state": "loser replays stored result"
+              }
+            ]
+          }
+        },
+        {
+          "key": "arbiter",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-flow\">\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-a\">Request 1<span class=\"tag\">key K</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-c\">INSERT (K, pending)<span class=\"tag\">both arrive</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-a\">wins the row<span class=\"tag\">unique index</span></span>\n  </div>\n  <div class=\"ld-col\"><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-b\">Request 2<span class=\"tag\">same key K</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-dim\">INSERT (K, pending)<span class=\"tag\">already exists</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-r\">error 1062<span class=\"tag\">SQLSTATE 23000</span></span>\n  </div>\n  <div class=\"ld-col\"><span class=\"ld-arrow\">&#8658;</span></div>\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-c\">loser reads the row<span class=\"tag\">replays the stored response</span></span>\n  </div>\n</div>",
+            "title": "The unique index arbitrates the race",
+            "caption": "The database serializes the two INSERTs: exactly one wins, and the loser receives a duplicate-key error it must treat as 'already done' — never as a second charge."
+          }
+        },
+        {
+          "key": "catch",
+          "kind": "heading",
+          "title": "Catch the duplicate — replay, and finalize once"
+        },
+        {
+          "key": "catch-code",
+          "kind": "code",
+          "payload": {
+            "code": "$key = $request->header('Idempotency-Key');\n\ntry {\n    $payment = DB::transaction(function () use ($key, $request) {\n        return Payment::create([\n            'user_id' => $request->user()->id,\n            'idempotency_key' => $key,\n            'status' => 'pending',\n            'amount' => $request->amount,\n        ]);\n    });\n} catch (QueryException $e) {\n    if ($e->errorInfo[1] !== 1062) {   // MySQL duplicate key\n        throw $e;\n    }\n\n    // another request owns this key — turn into a reader and replay\n    return Payment::where('idempotency_key', $key)->firstOrFail();\n}\n\n$response = $provider->charge($payment->amount, $key);   // key forwarded\n\n$finalized = Payment::whereKey($payment->id)\n    ->where('status', 'pending')       // one-time state transition\n    ->update(['status' => 'succeeded', 'provider_ref' => $response['id']]);\n\nif ($finalized === 0) {\n    // another copy already finalized this payment — do NOT charge again\n}",
+            "title": "The payments endpoint shape: insert, charge with the key, finalize with a guard",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "provider-note",
+          "kind": "prose",
+          "payload": {
+            "text": "The provider call needs its own protection: pass the same idempotency key to the provider — Stripe's Idempotency-Key does exactly this — so that even if your dedup failed, or the process died after charging but before saving the response, the provider returns the original charge instead of creating a second one. Store the provider response on the row so a replay can return the original result verbatim.\n\nTwo edges from the module's answer: different keys for the same underlying order should be blocked by an additional unique index on `order_id` (otherwise a user can generate two keys and get charged twice), and an idempotency key that expires is fine as long as the provider-key mapping stays stable."
+          }
+        },
+        {
+          "key": "queues",
+          "kind": "heading",
+          "title": "Queues: at-least-once delivery"
+        },
+        {
+          "key": "queues-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Queue consumers run on an at-least-once transport: the same job — a webhook handler that credits a wallet or sends an SMS — can be delivered more than once, sometimes while an earlier copy is still running. The general law: **at-least-once delivery plus an idempotent consumer is the only way to get exactly-once effect**; exactly-once delivery is a claim you should not trust from a broker.\n\nFramework context: Laravel's `ShouldBeUnique` uses the cache for deduplication — explicitly a best-effort optimization, not a guarantee. Symfony Messenger has no built-in deduplication; the recommended approach is DB-backed idempotency keys or a claim table, exactly as below."
+          }
+        },
+        {
+          "key": "patterns",
+          "kind": "heading",
+          "title": "Two robust idempotent-consumer patterns"
+        },
+        {
+          "key": "pattern-a-code",
+          "kind": "code",
+          "payload": {
+            "code": "DB::transaction(function () use ($event) {\n    ProcessedEvent::create(['event_id' => $event->id]);   // UNIQUE index on event_id\n\n    $wallet->credit($event->amount);                     // the business effect\n});\n\n// A re-delivered copy hits the unique index first -> SQLSTATE 23000 -> return early",
+            "title": "Pattern A — commit a marker in the same transaction as the effect",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "pattern-b-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Pattern B makes the business write itself conditional and idempotent — a guarded UPDATE such as `SET status = 'credited' WHERE id = ? AND status = 'pending'` can only take effect once, because the second execution matches zero rows and becomes a no-op. This is also why a bare `UPDATE users SET balance = balance + X` is NOT idempotent: you gate it on a one-time state transition or on a unique ledger entry."
+          }
+        },
+        {
+          "key": "pattern-b-code",
+          "kind": "code",
+          "payload": {
+            "code": "$handled = DB::table('webhook_events')\n    ->where('id', $event->id)\n    ->where('status', 'pending')      // one-time state transition\n    ->update(['status' => 'processed']);\n\n// $handled === 0 -> the work was already done -> re-execution is a no-op",
+            "title": "Pattern B — the write matches zero rows the second time",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "cache-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "Cache locks and the sync driver are not idempotency",
+            "text": "A cache lock only stops two copies from running CONCURRENTLY: once the first copy finishes and releases the lock, a re-delivered copy acquires it and runs the handler again — a duplicate effect. Locks are advisory and can be lost on expiry, eviction or a Redis restart, so they must never be the only defense for money-moving work. Switching the queue driver to 'sync' removes queues, not redelivery: a failed webhook retry still re-runs the code."
+          }
+        },
+        {
+          "key": "backoff",
+          "kind": "heading",
+          "title": "Pacing retries: exponential backoff (the drill)"
+        },
+        {
+          "key": "backoff-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Retries need pacing as well as deduplication. The module's task models a retry schedule: for a 1-based attempt number, wait `baseMs * 2^(attempt - 1)`, clamped to `maxMs` — defaults base 100 ms, cap 5000 ms. Attempt 1 waits the base delay, attempt 2 doubles it, and late attempts sit at the cap.\n\nThe debug sibling plants both failure modes: it uses the exponent `attempt` instead of `attempt - 1` — doubling one retry too early, so attempt 1 already waits 200 ms — and it never clamps, so `backoffDelay(10)` returns `102400` instead of `5000`. An off-by-one exponent and a missing clamp are silent timing bugs that make retries hammer an API under load — which is why the suite tests attempt 1, a late attempt and custom caps."
+          }
+        },
+        {
+          "key": "backoff-table",
+          "kind": "table",
+          "payload": {
+            "title": "backoffDelay with base 100 ms and cap 5000 ms",
+            "headers": [
+              "Attempt",
+              "Raw delay",
+              "Returned"
+            ],
+            "rows": [
+              [
+                "1",
+                "`100 x 2^0 = 100`",
+                "100"
+              ],
+              [
+                "2",
+                "`100 x 2^1 = 200`",
+                "200"
+              ],
+              [
+                "3",
+                "`100 x 2^2 = 400`",
+                "400"
+              ],
+              [
+                "5",
+                "`100 x 2^4 = 1600`",
+                "1600"
+              ],
+              [
+                "10",
+                "`100 x 2^9 = 51200`",
+                "**5000** (capped)"
+              ]
+            ],
+            "mono": [
+              0,
+              1
+            ],
+            "note": "Custom parameters scale identically: `backoffDelay(4, 50, 1000)` returns 400, `backoffDelay(10, 50, 1000)` returns 1000."
+          }
+        },
+        {
+          "key": "backoff-code",
+          "kind": "code",
+          "payload": {
+            "code": "function backoffDelay(int $attempt, int $baseMs = 100, int $maxMs = 5000): int\n{\n    $delay = $baseMs * 2 ** ($attempt - 1);\n\n    return min($delay, $maxMs);\n}",
+            "title": "The fixed drill — correct exponent, clamped to maxMs",
+            "lang": "php"
+          }
+        }
+      ]
+    }
+  ]
+}

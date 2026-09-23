@@ -1,0 +1,157 @@
+{
+  "topic_slug": "sql",
+  "tasks": [
+    {
+      "type": "scenario",
+      "title": "Eliminate N+1 in an order list that shows customer and item counts",
+      "difficulty": "medium",
+      "tags": ["n+1", "eloquent", "eager-loading", "doctrine", "sql"],
+      "description": "A Laravel admin page lists orders and, for each order, shows the customer name and the number of items. The current code is: $orders = Order::latest()->get(); and then in the Blade loop $order->customer->name and $order->items->count(). The page is slow on 500 orders. Explain exactly how many queries run, why, and give the idiomatic fix — including how you would verify the fix and how the same problem manifests (and is solved) in Doctrine/Symfony.",
+      "starter_code": null,
+      "test_suite": null,
+      "solution": "The current code triggers the N+1 problem twice over. Order::latest()->get() runs 1 query. Inside the loop, $order->customer->name lazy-loads the customer (1 query per order) and $order->items->count() lazy-loads the items collection (1 query per order). For 500 orders that is 1 + 500 + 500 = 1001 queries.\n\nThe fix is eager loading plus an aggregate, so the work drops to a constant number of queries:\n$orders = Order::with('customer')->withCount('items')->latest()->get();\nThis runs one query for orders, one WHERE customer_id IN (...) query for customers, and one GROUP BY order_id aggregate for the item counts. The loop then reads $order->customer->name and $order->items_count with zero further queries.\n\nVerification: watch the query log (Telescope/Debugbar) before and after — the query count must stop scaling with the row count; or add an automated guard with DB::listen that asserts the number of queries for N rows is constant. In Doctrine the equivalents are a DQL fetch join (SELECT o, c, i FROM Order o JOIN o.customer c LEFT JOIN o.items i) to hydrate related entities in one query — with the caveat that a to-many join inflates the result set — or using the extra-lazy association option so count() issues a COUNT instead of loading the whole collection. State the principle: N+1 is a data-access-pattern bug (per-row round trips), not a schema or index bug, and the fix is always to batch the related loads or aggregates.",
+      "rubric": {
+        "criteria": [
+          "Correctly identifies 1 + N + N queries (orders + per-row customer + per-row items) and the lazy-loading trigger",
+          "Gives the idiomatic Laravel fix: with('customer')->withCount('items') and reads items_count",
+          "Explains the resulting constant query count (IN-clause eager load + aggregate)",
+          "Describes detection: query log, Telescope/Debugbar, or a DB::listen query-count guard",
+          "Maps the same problem to Doctrine (fetch join / extra-lazy) with the to-many join caveat"
+        ],
+        "key_points": [
+          "N+1 is per-row round trips (data-access pattern), not a missing index",
+          "with('customer') batches the relation into a single WHERE id IN (...) query",
+          "withCount('items') produces an aggregate column instead of loading full collections",
+          "Verify with the query log or an automated query-count assertion",
+          "Doctrine: DQL fetch join or extra-lazy associations; to-many joins inflate results"
+        ]
+      }
+    },
+    {
+      "type": "scenario",
+      "title": "Write a top-customers revenue report (JOIN + GROUP BY + HAVING)",
+      "difficulty": "medium",
+      "tags": ["sql", "join", "group-by", "having", "write-query"],
+      "description": "Schema: customers(id, name), orders(id, customer_id, status, total). Write the SQL that returns the top 5 customers by paid revenue (customer id, name, revenue, highest first), and justify each clause — in particular WHERE vs HAVING, the GROUP BY columns under ONLY_FULL_GROUP_BY, and what changes if you needed to include customers with zero revenue.",
+      "starter_code": null,
+      "test_suite": null,
+      "solution": "SELECT c.id, c.name, COALESCE(SUM(o.total), 0) AS revenue\nFROM customers c\nLEFT JOIN orders o ON o.customer_id = c.id AND o.status = 'paid'\nGROUP BY c.id, c.name\nORDER BY revenue DESC\nLIMIT 5;\n\nClause by clause: the LEFT JOIN (with the status condition in the ON clause) keeps every customer, so customers with no paid orders survive with SUM over zero rows, which is NULL — COALESCE turns that into 0, satisfying 'include zero-revenue customers'. If you only care about customers who actually paid, switch to INNER JOIN and drop the COALESCE. WHERE filters rows before grouping; here the status filter is placed in the ON clause precisely so that it does not drop customers with no paid orders — putting status = 'paid' in WHERE would first discard unpaid rows and then, with a LEFT JOIN, the ON-only customers would vanish, which is the subtle trap. GROUP BY must list every non-aggregated selected column (c.id, c.name) under ONLY_FULL_GROUP_BY. HAVING would only be needed for an aggregate condition (e.g. HAVING SUM(o.total) > 1000). ORDER BY can reference the alias revenue; LIMIT 5 caps the result.\n\nThe interview-ready summary: LEFT JOIN + filter-in-ON to keep all left rows; WHERE for row filtering that should reduce both sides; HAVING only for aggregate conditions; GROUP BY every non-aggregated select column.",
+      "rubric": {
+        "criteria": [
+          "Correct SQL with LEFT JOIN (or INNER JOIN with a clear justification) and COALESCE for zero-revenue customers",
+          "Places the status filter correctly and explains the ON vs WHERE trap with LEFT JOIN",
+          "GROUP BY lists all non-aggregated selected columns (ONLY_FULL_GROUP_BY)",
+          "Distinguishes WHERE (row filter) from HAVING (aggregate filter) and notes HAVING is unneeded here",
+          "Orders by the aggregate descending and limits to 5"
+        ],
+        "key_points": [
+          "LEFT JOIN + status in ON keeps zero-revenue customers; INNER JOIN drops them",
+          "COALESCE(SUM(...), 0) converts NULL (no rows) to 0",
+          "Filter-in-ON vs WHERE changes LEFT JOIN semantics — know the trap",
+          "GROUP BY every non-aggregated column under ONLY_FULL_GROUP_BY",
+          "ORDER BY alias DESC LIMIT 5"
+        ]
+      }
+    },
+    {
+      "type": "scenario",
+      "title": "Top-N rows per group with window functions",
+      "difficulty": "hard",
+      "tags": ["sql", "window-functions", "row_number", "top-n"],
+      "description": "You need, for each customer, the 3 most valuable orders (by total). Show the SQL using a window function, explain why a plain GROUP BY cannot produce 'top 3 rows per group', and note what ROW_NUMBER vs RANK vs DENSE_RANK would change for tied totals.",
+      "starter_code": null,
+      "test_suite": null,
+      "solution": "SELECT *\nFROM (\n  SELECT o.*,\n         ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY total DESC) AS rn\n  FROM orders o\n) ranked\nWHERE rn <= 3;\n\nThe window function computes a per-customer row number: PARTITION BY customer_id resets the counter for each customer, ORDER BY total DESC assigns 1 to the most valuable order, and the outer WHERE rn <= 3 keeps the top three per group. A plain GROUP BY customer_id collapses each customer to a single row, so it can compute aggregates (MAX, SUM, COUNT) but cannot return the individual top-3 rows — 'give me N rows per group' is exactly the problem window functions exist to solve.\n\nTie handling: ROW_NUMBER() always produces distinct values, so with a tie it picks an arbitrary but deterministic order and returns exactly 3 rows per customer. RANK() gives tied rows the same rank and leaves gaps (1,2,2,4), so WHERE rn <= 3 could return MORE than 3 rows when ties straddle the boundary. DENSE_RANK() has no gaps (1,2,2,3) and still shares ranks on ties. Use ROW_NUMBER() for 'exactly N per group'; use RANK()/DENSE_RANK() when you genuinely want 'everything tied for the top N places'. In Laravel, the raw query can be embedded with DB::select or a subquery in the query builder; note window functions run after WHERE/GROUP BY but before the final ORDER BY.",
+      "rubric": {
+        "criteria": [
+          "Correct subquery with ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY total DESC) and outer WHERE rn <= 3",
+          "Explains why GROUP BY cannot return N rows per group (it collapses to one row)",
+          "Explains window evaluation order (after WHERE/GROUP BY, before final ORDER BY)",
+          "Distinguishes ROW_NUMBER (exactly N) from RANK (gaps) and DENSE_RANK (no gaps) for ties"
+        ],
+        "key_points": [
+          "ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...) + outer WHERE rn <= N",
+          "GROUP BY collapses groups to one row; window functions keep every row",
+          "ROW_NUMBER gives exactly N per group; RANK may exceed N on ties (gaps)",
+          "Window functions run after WHERE/GROUP BY, before final ORDER BY"
+        ]
+      }
+    },
+    {
+      "type": "scenario",
+      "title": "Speed up a slow query: index choice and reading EXPLAIN",
+      "difficulty": "hard",
+      "tags": ["sql", "indexes", "explain", "optimization", "composite-index"],
+      "description": "A dashboard runs: SELECT * FROM orders WHERE customer_id = 5 ORDER BY created_at DESC LIMIT 20; against a table of 20 million orders, and it is slow. Walk through your optimization: what index you would add and why its column order matters, how you verify it with EXPLAIN (which columns you read), and what you would do if the index did not help.",
+      "starter_code": null,
+      "test_suite": null,
+      "solution": "Add a composite index on (customer_id, created_at): CREATE INDEX idx_orders_customer_created ON orders (customer_id, created_at DESC);\n\nColumn order matters because of the leftmost-prefix rule. The predicate filters on customer_id (equality) and then sorts by created_at, so the index is ordered first by customer_id and then by created_at — the database can seek to customer_id = 5 and walk the already-sorted created_at values, reading just the top 20 rows, with no filesort and no full scan. Putting created_at first would break the equality filter, and a single-column index on customer_id alone would still need a sort step over all of that customer's orders.\n\nVerify with EXPLAIN SELECT ... and read the type, key, rows and Extra columns: before the index, type is likely ALL (full table scan) or a range with a large rows estimate and Extra showing Using filesort; after the index, type is ref, key = idx_orders_customer_created, rows drops to the number of that customer's orders, and the Using filesort disappears. EXPLAIN ANALYZE (MySQL 8.0.18+) is even better — it reports actual, not estimated, timings.\n\nIf the index does not help, check the predicate is sargable (no function or leading wildcard on the column), that the column is selective enough (an index on a low-cardinality column like status is often ignored), and that the query is not the victim of a stale statistics table (ANALYZE TABLE). Also consider a covering index if the SELECT list is narrow, and confirm the ORDER BY direction matches the index (DESC here) so MySQL 8 can walk the index backwards without a sort.",
+      "rubric": {
+        "criteria": [
+          "Proposes a composite index on (customer_id, created_at) with the correct column order and a reason",
+          "Explains the leftmost-prefix rule and why the equality column precedes the sort column",
+          "Reads EXPLAIN correctly: type (ALL/ref), key, rows, and Extra (Using filesort)",
+          "Mentions EXPLAIN ANALYZE for actual timings",
+          "Has a fallback diagnosis: sargability, selectivity, ANALYZE TABLE, covering index, sort direction"
+        ],
+        "key_points": [
+          "Composite index (equality column, sort column) satisfies both filter and ORDER BY",
+          "Leftmost prefix: the leading column must match the predicate",
+          "EXPLAIN: look for type=ref, key set, low rows, and no Using filesort",
+          "EXPLAIN ANALYZE gives actual timings, not estimates",
+          "If it does not help: sargability, selectivity, stale stats, covering index, sort direction"
+        ]
+      }
+    },
+    {
+      "type": "scenario",
+      "title": "Paginate a huge ordered list without OFFSET",
+      "difficulty": "hard",
+      "tags": ["sql", "pagination", "keyset", "cursor", "offset"],
+      "description": "An infinite-scroll feed shows posts ordered by id DESC. The current code uses LIMIT 20 OFFSET 100000 for deep pages and it gets slower the further users scroll. Explain why OFFSET degrades, and design the keyset/cursor alternative — including the exact queries for the first and subsequent pages, how you handle the tiebreaker for a non-unique sort key, and the trade-off you accept.",
+      "starter_code": null,
+      "test_suite": null,
+      "solution": "OFFSET pagination is O(page): to return rows 100001–100020 the database still walks and discards the first 100000 matching rows, and that work grows with every page. Keyset pagination replaces the offset with a bookmark on the sort key:\n\n-- page 1\nSELECT id, title FROM posts ORDER BY id DESC LIMIT 20;\n-- page 2+ (the client sends back the last id it saw)\nSELECT id, title FROM posts WHERE id < ? ORDER BY id DESC LIMIT 20;\n\nBecause id is the primary key and the sort key, the database seeks directly to the position after the last seen row — O(log n) regardless of depth — and the query stays fast even at page 5000. The client keeps the last id of each page as its cursor and passes it back as the bound parameter for the next page.\n\nTiebreaker: if the sort key is not unique (e.g. ORDER BY score DESC), two rows can share a value and a naive WHERE score < ? would skip or duplicate rows. The fix is a composite cursor: ORDER BY score DESC, id DESC with WHERE (score, id) < (?, ?) — or, in MySQL, WHERE score < ? OR (score = ? AND id < ?) — so the position is always unambiguous.\n\nThe accepted trade-off: keyset pagination cannot jump to an arbitrary page number and has no total-count in the response (unless you run a separate COUNT); it shines for infinite scroll and API feeds where 'next page' is all the client needs. In Laravel this is cursorPaginate(), which encodes the cursor for you; the same idea appears in the dojo's next_cursor/decode_cursor tasks.",
+      "rubric": {
+        "criteria": [
+          "Explains that OFFSET scans and discards all prior rows, so cost grows with page depth",
+          "Gives the keyset queries: first page, then WHERE id < last_seen ORDER BY id DESC LIMIT n",
+          "Handles the non-unique sort key with a composite cursor (score, id)",
+          "States the trade-off: no random page jumps, no cheap total count"
+        ],
+        "key_points": [
+          "OFFSET is O(page) — it skips rows by scanning them",
+          "Keyset: WHERE id < last_seen ORDER BY id DESC LIMIT n, seeking straight to the position",
+          "Non-unique sort key needs a composite cursor (sort_key, id)",
+          "Trade-off: no arbitrary page number, no cheap total count"
+        ]
+      }
+    },
+    {
+      "type": "scenario",
+      "title": "Prevent SQL injection across a query layer",
+      "difficulty": "medium",
+      "tags": ["sql-injection", "security", "prepared-statements", "laravel", "symfony"],
+      "description": "You are reviewing a codebase for SQL injection. Some queries use raw DB::select() or Doctrine NativeQuery, some use the query builder, and one helper concatenates a user-supplied sort column into ORDER BY. Describe your defense in layers: what makes parameterized queries safe, where binding does not work (identifiers like column names), and how you fix the ORDER BY case.",
+      "starter_code": null,
+      "test_suite": null,
+      "solution": "The core defense is parameterization: a prepared statement sends the SQL structure and the data separately, so a malicious value is treated as a literal string, never as SQL syntax. Use PDO::prepare/execute with placeholders, Laravel's DB::select('... WHERE x = ?', [$x]), or the query builder (where('x', $x)) / Doctrine setParameter — all bind values.\n\nWhere binding does NOT work is identifiers and structural fragments: table names, column names, and things like the direction in ORDER BY cannot be bound as values, because placeholders only represent data. If you interpolate a user-supplied column name into ORDER BY $sort, you are open to injection no matter how well the rest of the query is bound.\n\nThe fix for the ORDER BY (and any dynamic identifier) case is an allow-list: define the set of legal columns and map the user's choice to it, e.g. $allowed = ['name' => 'name', 'date' => 'created_at', 'revenue' => 'total']; $column = $allowed[$request->input('sort')] ?? 'created_at'; and likewise validate the direction against ['asc', 'desc']. Only values that passed the whitelist are interpolated.\n\nLayered summary: (1) bind every value, everywhere — raw SQL included; (2) never escape by hand (addslashes is not a defense); (3) for identifiers and keywords, use an allow-list, not escaping; (4) prefer the ORM/query builder so binding is the default; (5) as a backstop, the database user should run with least privilege (no DDL on app accounts) so even a successful injection is bounded.",
+      "rubric": {
+        "criteria": [
+          "Explains parameterization: structure and data travel separately, so input cannot become syntax",
+          "Covers binding in raw SQL (DB::select with ?), query builder, and Doctrine setParameter",
+          "Identifies identifiers (column/table names, sort direction) as un-bindable and therefore the injection point",
+          "Fixes ORDER BY via an allow-list/whitelist, not escaping",
+          "Mentions least-privilege DB accounts as a backstop"
+        ],
+        "key_points": [
+          "Bind every value; prepared statements make input a literal, not code",
+          "Identifiers cannot be bound — they are the injection surface for ORDER BY",
+          "Allow-list the column and direction; never interpolate raw user choice",
+          "addslashes is not a defense; prefer the ORM/query builder",
+          "Least-privilege DB accounts bound the blast radius"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,1432 @@
+{
+  "topic_slug": "architecture-scalability",
+  "lessons": [
+    {
+      "slug": "stateless-scale-out",
+      "title": "Scale out, not up: stateless app servers",
+      "summary": "The module opens with the naming question — vertical versus horizontal scaling — and the rest is the hidden condition behind it: statelessness. This lesson makes the trade-offs automatic, replays the two-server logout bug, explains why sticky sessions are a band-aid, and ends with Octane, where the same rule applies inside a single long-lived process.",
+      "minutes": 11,
+      "difficulty": "medium",
+      "tags": [
+        "scaling",
+        "architecture",
+        "horizontal-scaling",
+        "statelessness",
+        "sessions",
+        "redis",
+        "load-balancing",
+        "sticky-sessions",
+        "autoscaling",
+        "octane",
+        "state-management",
+        "opcache",
+        "laravel"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Two of the module's opening questions look like vocabulary drills and are really architecture filters: 'name the two ways to add capacity' and 'why do users get randomly logged out on the second server'. Anyone can answer the first; the senior signal is whether you say the word the second implies — **statelessness** — and whether you can explain what breaks when it is missing. This lesson builds that picture top-down, and the last part applies the same rule one level deeper, inside a single long-lived Octane worker."
+          }
+        },
+        {
+          "key": "vocab-head",
+          "kind": "heading",
+          "title": "Two ways to add capacity: up vs out"
+        },
+        {
+          "key": "vocab-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "**Vertical scaling** gives one machine more vCPUs, RAM or disk. It is simple to reason about, but you hit a hardware ceiling, you pay for idle headroom sized to the peak you rarely hit, and you keep a single point of failure — one box, one crash, everything down. **Horizontal scaling** puts two or more identical application servers behind a load balancer. Capacity now grows in small, repeatable steps, and those steps can be automated: autoscaling rules add or remove nodes based on CPU, request rate or queue depth."
+          }
+        },
+        {
+          "key": "vocab-table",
+          "kind": "table",
+          "payload": {
+            "headers": [
+              "Dimension",
+              "Vertical (up)",
+              "Horizontal (out)"
+            ],
+            "rows": [
+              [
+                "Capacity step",
+                "one, bigger machine",
+                "one more identical node"
+              ],
+              [
+                "Ceiling",
+                "one machine's hardware max",
+                "practically unbounded"
+              ],
+              [
+                "Cost shape",
+                "idle headroom you pay for at the peak",
+                "pay for what runs; scale to demand"
+              ],
+              [
+                "Failure mode",
+                "single point of failure",
+                "node loss absorbed by the others"
+              ],
+              [
+                "Automation",
+                "manual upgrade",
+                "autoscaling on CPU / request rate / queue depth"
+              ]
+            ],
+            "title": "Vertical vs horizontal, dimension by dimension",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "why-head",
+          "kind": "heading",
+          "title": "Why PHP makes scale-out easy"
+        },
+        {
+          "key": "why-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "PHP fits this model unusually well: in the classic php-fpm setup every HTTP request into Laravel or Symfony boots the framework and dies with it, so requests are independent of each other, and you can add php-fpm nodes freely behind the load balancer — **provided the app is truly stateless**. That is the hidden condition every scaling discussion lands on: sessions, cache and queue state must live in a shared store such as Redis, and uploaded files must go to object storage, not a local disk that only one node sees. Note what does not scale this way: the relational database. A primary is effectively single-writer, so while the app tier grows horizontally with ease, the database is the real ceiling — the rest of this module (caching, replicas, queues, pooling) exists because of that one sentence."
+          }
+        },
+        {
+          "key": "fig-scale",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-flow ld-flow-nw\">\n  <div class=\"ld-col\"><span class=\"ld-box ld-b\">Client</span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-c\">Load balancer<span class=\"tag\">round-robin / least-connections</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-a\">App nodes A, B, C&hellip;<span class=\"tag\">stateless, autoscaled</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-b\">Shared Redis<span class=\"tag\">sessions &middot; cache &middot; queues</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-r\">MySQL primary<span class=\"tag\">single writer &mdash; the real ceiling</span></span></div>\n</div>",
+            "title": "Any request can hit any node because state lives outside them",
+            "caption": "Sessions, cache and queue state sit in shared Redis; the primary stays single-writer, which is the ceiling the rest of this module attacks."
+          }
+        },
+        {
+          "key": "session-head",
+          "kind": "heading",
+          "title": "What breaks first: file-backed sessions"
+        },
+        {
+          "key": "session-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "With the `file` session driver, Laravel stores each session under `storage/framework/sessions` **on the server that handled the request**. Run two nodes behind a load balancer and the login lands on node A; the next request is routed to node B, whose local file store has never seen that session id — so the user appears logged out. Route back to A and they are magically logged in again. Users 'randomly logged out when they refresh' is exactly this topology — not a cookie problem, not an APP_KEY problem."
+          }
+        },
+        {
+          "key": "session-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Login request reaches node A",
+                "text": "The session file is written to node A's `storage/framework/sessions`. The response sets the session cookie on the client.",
+                "state": "session stored on A only"
+              },
+              {
+                "title": "Refresh is load-balanced to node B",
+                "text": "B looks for the same session id in its own local store — nothing there — so Laravel treats the user as a guest.",
+                "state": "user looks logged out"
+              },
+              {
+                "title": "Next request returns to node A",
+                "text": "A still holds the session file, so the user is logged in again. Same account, alternating states, no error anywhere.",
+                "state": "back to logged in"
+              }
+            ],
+            "title": "The two-server logout, step by step",
+            "intro": "File driver, two nodes, no sticky sessions."
+          }
+        },
+        {
+          "key": "session-code",
+          "kind": "code",
+          "payload": {
+            "code": "# .env — every node points at the same shared store\nSESSION_DRIVER=redis",
+            "lang": "text",
+            "title": "The one-line fix in Laravel"
+          }
+        },
+        {
+          "key": "session-fix-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "Move sessions to a shared store and the nodes become interchangeable: any node can validate any session, so any request can be served by any node and nodes can be added, removed or auto-scaled freely. In `config/session.php` this is the `driver => 'redis'` entry; in Symfony you configure the Redis session save handler, or go fully stateless with signed or opaque tokens validated per request. One sharp detail interviewers drop in: the APP_KEY **can** be shared between servers — encryption works fine across nodes. It is file-backed state that breaks, not cryptography."
+          }
+        },
+        {
+          "key": "sticky-head",
+          "kind": "heading",
+          "title": "Why sticky sessions are not durable"
+        },
+        {
+          "key": "sticky-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "Sticky sessions (session affinity) make the load balancer route every request from the same client to the same backend node, so the file-backed session keeps being found and the symptom disappears. The price is that your nodes are no longer interchangeable, and at peak traffic that bites four ways. No redundancy: a node that dies, is restarted or is drained during a rolling deploy takes every pinned user's session with it. Skew: affinity is usually a hash of the client IP, so offices and NAT users pile onto one node while others sit idle, and autoscaling in or out reshuffles the pins and can silently drop sessions. No true scaling: adding a node only helps users newly pinned to it, and removing one evicts its users. And the load-balancing algorithms that assume stateless backends — least-connections, weighted round-robin — no longer apply cleanly."
+          }
+        },
+        {
+          "key": "sticky-callout",
+          "kind": "callout",
+          "payload": {
+            "tone": "warning",
+            "text": "Sticky sessions have exactly one legitimate role: a short-term migration bridge — for example while you centralise an existing file-based session store. Track them as technical debt with a removal plan. The durable design is stateless servers plus shared state (Redis sessions), plain round-robin or least-connections, and deploys that drain without user-visible logouts.",
+            "title": "Acceptable only as a temporary bridge"
+          }
+        },
+        {
+          "key": "octane-head",
+          "kind": "heading",
+          "title": "Same rule inside one process: Octane"
+        },
+        {
+          "key": "octane-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "Octane (Swoole, RoadRunner or FrankenPHP) serves Laravel from long-running workers instead of booting the framework for every request, and that flips the state lifecycle. In classic php-fpm, per-request state dies with the process, so careless code gets away with stashing current-user data in static properties or container singletons. Under Octane the container and your classes persist between requests: a static property written during request A is still there for request B, so user A's data can leak into user B's response, and anything baked at boot goes stale until workers are recycled. That is the bug class the module's hard question describes — values that should be fresh per request are sometimes stale, or data is shared between users, and only under high traffic."
+          }
+        },
+        {
+          "key": "octane-code",
+          "kind": "code",
+          "payload": {
+            "code": "// BAD under Octane: this survives between requests\nclass CurrentTenant\n{\n    public static ?int $tenantId = null;   // written during request A...\n}\n\n// ...and still there during request B: another tenant's data leaks.\n\n// Rule: request-scoped data lives in the request lifecycle (request\n// object, session, cache), never in statics or long-lived singletons.",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "octane-callout",
+          "kind": "callout",
+          "payload": {
+            "tone": "tip",
+            "text": "After deploying new code or changing boot-time configuration, run `php artisan octane:reload` so workers restart cleanly — a deploy can appear to do nothing until you do. Do not confuse the tools: opcache stores compiled bytecode so each request does not recompile the framework, `php artisan optimize` caches config, routes and views so each worker boots cheaply, and Octane reuses the booted application. Mentioning memory leaks in long-running workers and testing under concurrency shows you have actually run Octane in production.",
+            "title": "Octane complements opcache and config caches"
+          }
+        }
+      ]
+    },
+    {
+      "slug": "cache-first",
+      "title": "Cache first: the first scaling lever",
+      "summary": "Reads dominate web workloads and repeat heavily, so caching removes repeated expensive work from the request path before you buy hardware. Learn the three layers — edge, application and bytecode — and the price you pay: invalidation and cache stampedes.",
+      "minutes": 7,
+      "difficulty": "easy",
+      "tags": [
+        "caching",
+        "redis",
+        "cdn",
+        "scalability",
+        "opcache"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The senior-engineer sentence from the module is worth keeping as an interview opener: 'before you buy another server or open more database connections — cache.' The quiz question asks why caching is usually the **first** scaling lever for a Laravel or Symfony application under read-heavy load. The answer is the cheapest and most reversible lever in this module, and the same instruction reappears as step two of the flash-sale plan."
+          }
+        },
+        {
+          "key": "why-head",
+          "kind": "heading",
+          "title": "Why reads make caching the first lever"
+        },
+        {
+          "key": "why-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "Read traffic dominates almost every web workload, and most reads repeat: the same product page, feed or aggregate is requested thousands of times. Caching removes that repeated expensive work — database queries, template rendering, external API calls — from the per-request critical path, so one server serves dramatically more users before you need more hardware. It is the first lever because it is cheap, reversible, and it cuts the real bottleneck — the database — instead of buying hardware around it."
+          }
+        },
+        {
+          "key": "layers-head",
+          "kind": "heading",
+          "title": "Three layers, top-down"
+        },
+        {
+          "key": "layers-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Edge / HTTP caching",
+                "text": "A CDN or reverse proxy serves static assets and fully cacheable pages from the location nearest the user. This cuts origin and database traffic before the request ever reaches your framework.",
+                "state": "nearest CDN node answers"
+              },
+              {
+                "title": "Application caching",
+                "text": "The Laravel Cache facade with the Redis driver stores query results and rendered fragments — the per-request critical path skips repeated work. Symfony Cache (PSR-6/16) plays the same role.",
+                "state": "Cache::remember stores the result"
+              },
+              {
+                "title": "Bytecode caching",
+                "text": "opcache stores compiled PHP bytecode so each request does not recompile the framework. No data you query for lives here — it is CPU savings, not result caching.",
+                "state": "framework boots from bytecode"
+              }
+            ],
+            "title": "Name the layers top-down in the interview",
+            "intro": "A senior answer names the layers in this order, then adds the database sentence below."
+          }
+        },
+        {
+          "key": "cache-code",
+          "kind": "code",
+          "payload": {
+            "code": "// Application layer: one cache entry per product, refreshed every 600 s.\n// Miss -> run the closure and store the result; hit -> skip the query.\n\n$product = Cache::remember('product.' . $id, 600, function () use ($id) {\n    return Product::with('reviews')->findOrFail($id);   // the expensive part\n});",
+            "lang": "php",
+            "title": "Cache::remember against Redis"
+          }
+        },
+        {
+          "key": "price-head",
+          "kind": "heading",
+          "title": "The price: staleness and stampedes"
+        },
+        {
+          "key": "price-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "Caching buys speed with a freshness contract. Invalidate wrongly — or never — and users see stale data. Give a hot key the same TTL as everything else and you invite the second failure mode: the **cache stampede**. A popular key expires at peak, hundreds of requests miss simultaneously, and every one recomputes the same expensive value — recreating exactly the load you cached to avoid. That is why expensive keys get locks or atomic refreshes instead of a plain TTL. Two more rules from the module's explanation: never cache writes, and never cache user-specific content carelessly."
+          }
+        },
+        {
+          "key": "layers-table",
+          "kind": "table",
+          "payload": {
+            "headers": [
+              "Layer",
+              "What it stores",
+              "What it cuts",
+              "Typical tool"
+            ],
+            "rows": [
+              [
+                "Edge / HTTP",
+                "static assets, fully cacheable pages",
+                "origin + database traffic",
+                "CDN or reverse proxy"
+              ],
+              [
+                "Application",
+                "query results, rendered fragments",
+                "database load, latency",
+                "Laravel Cache + Redis / Symfony Cache"
+              ],
+              [
+                "Bytecode",
+                "compiled PHP",
+                "per-request CPU",
+                "opcache"
+              ]
+            ],
+            "title": "The three layers at a glance",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "Do not confuse opcache with application caching: opcache stores compiled bytecode so the framework is not recompiled per request — it stores no data you query for. And cache the **result of work**, never writes: a mutation that 'succeeds' from cache before the database agrees is a data-loss bug.",
+            "title": "Bytecode is not a result cache"
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Interview follow-up that separates candidates: name the layers top-down (edge, application, bytecode), then say the strategy sentence from the module's scenario drill — *shared Redis with short TTLs, the database as the fallback rather than the hot path*. That sentence is the entire caching posture of a system designed to survive a 10-20x spike."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "n-plus-1-and-keyset-pagination",
+      "title": "Fewer queries: N+1 and keyset pagination",
+      "summary": "A page of 50 posts with lazy-loaded relations can cost roughly 1 + 2N queries — invisible in development, fatal at peak. Learn eager loading as the fix, then the module's two cursor drills, which encode the other half of cheap paging: an explicit, validated cursor instead of server-side page state.",
+      "minutes": 9,
+      "difficulty": "medium",
+      "tags": [
+        "database",
+        "n-plus-1",
+        "eloquent",
+        "performance",
+        "pagination",
+        "cursor",
+        "base64",
+        "keyset-pagination",
+        "null-handling"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The endpoint that lists 50 blog posts with their tags and authors was fast during development and melts the database at peak. The module question hands you the smoking gun: the same few SELECT statements for tags and authors executed hundreds of times **within a single request**. That is the N+1 problem — the cheapest 10x reduction in database load this module offers — and its close cousin, pagination, is what the two snippet drills encode."
+          }
+        },
+        {
+          "key": "lazy-head",
+          "kind": "heading",
+          "title": "Lazy loading is the bug"
+        },
+        {
+          "key": "lazy-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "Eloquent loads relations lazily by default. You query the 50 posts with one SELECT, then the rendering loop touches each post's tags and author, and Eloquent issues another query per post per relation: roughly 1 + 2N queries for one page of 50 posts — one for the page, up to fifty tag queries and fifty author queries. At a few requests per second that is invisible; at peak it compounds to thousands of queries per second, saturating database CPU, exhausting the connection pool, and taking down an endpoint that looked innocent."
+          }
+        },
+        {
+          "key": "count-table",
+          "kind": "table",
+          "payload": {
+            "headers": [
+              "Page size",
+              "Lazy loading (2 relations per post)",
+              "Eager loading"
+            ],
+            "rows": [
+              [
+                "50",
+                "up to 1 + 2*50 = **101** queries",
+                "a handful — independent of page size"
+              ],
+              [
+                "200",
+                "up to 1 + 2*200 = **401** queries",
+                "a handful"
+              ],
+              [
+                "1000",
+                "up to 1 + 2*1000 = **2001** queries",
+                "a handful"
+              ]
+            ],
+            "title": "One page load, before and after eager loading",
+            "note": "**Bold** numbers are the per-row lazy queries compounding; eager loading collapses them to one bulk query per relation, so the count stops growing with the page.",
+            "mono": [
+              0
+            ],
+            "em": [
+              1
+            ]
+          }
+        },
+        {
+          "key": "n1-fig",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-flow ld-flow-nw\">\n  <div class=\"ld-col\"><span class=\"ld-box ld-b\">1 query<span class=\"tag\">SELECT posts LIMIT 50</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-c\">render loop<span class=\"tag\">50 posts</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-r\">$post-&gt;tags<span class=\"tag\">lazy &mdash; 1 query per post</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-r\">$post-&gt;author<span class=\"tag\">lazy &mdash; 1 query per post</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-r\">up to 1 + 2N queries<span class=\"tag\">about 101 for 50 posts</span></span></div>\n</div>",
+            "title": "How one page of posts becomes 101 queries",
+            "caption": "Lazy loading fires one query per post per relation inside the render loop; eager loading collapses these to one bulk query per relation."
+          }
+        },
+        {
+          "key": "fix-head",
+          "kind": "heading",
+          "title": "The fix: eager load once"
+        },
+        {
+          "key": "fix-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Eager-load the relations",
+                "text": "`Post::with(['tags', 'author'])` tells Eloquent to load every post's tags and authors up front, in bulk, instead of on demand. One page now costs a handful of queries.",
+                "state": "~101 queries -> a handful"
+              },
+              {
+                "title": "Make lazy loading impossible in dev",
+                "text": "Call `Model::preventLazyLoading()` in a service provider so accidental lazy loads throw during development instead of silently shipping to production. This is the recurrence guard interviewers ask about.",
+                "state": "accidental lazy load = exception in dev"
+              },
+              {
+                "title": "Then reduce cost and spread load",
+                "text": "Add indexes for every WHERE, JOIN and ORDER BY the hot queries use, and track queries-per-request in your logs so a regression is caught in review. Order matters: reduce query count first, then query cost, then spread load to replicas and pools.",
+                "state": "count -> cost -> spread"
+              }
+            ],
+            "title": "The three-move fix"
+          }
+        },
+        {
+          "key": "fix-code",
+          "kind": "code",
+          "payload": {
+            "code": "// before: lazy loading inside the render loop\n$posts = Post::paginate(50);\nforeach ($posts as $post) {\n    foreach ($post->tags as $tag) { /* ... */ }   // SELECT ... per post\n    echo $post->author->name;                     // SELECT ... per post\n}\n\n// after: eager load both relations once\n$posts = Post::with(['tags', 'author'])->paginate(50);",
+            "lang": "php",
+            "title": "with() collapses 1 + 2N queries"
+          }
+        },
+        {
+          "key": "cursor-head",
+          "kind": "heading",
+          "title": "Paging at scale: keyset cursors"
+        },
+        {
+          "key": "cursor-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "The module's two pagination drills implement the cursor half of an API. Instead of the server remembering where each client is, the client carries an opaque token and sends it back when it wants the next page — no per-client paging state kept on the server. `next_cursor` encodes that token from an already-sorted page of rows; `decode_cursor` turns a received token back into data a query can use, and the null sentinel is the entire contract."
+          }
+        },
+        {
+          "key": "encode-code",
+          "kind": "code",
+          "payload": {
+            "code": "function next_cursor(array $rows, string $orderBy): ?string\n{\n    if ($rows === []) {\n        return null;                     // empty page -> no next page\n    }\n\n    $last = end($rows);                  // rows arrive sorted by $orderBy\n\n    return base64_encode((string) $last[$orderBy]);\n}",
+            "lang": "php",
+            "title": "Encoding: base64 of the last row's sort key"
+          }
+        },
+        {
+          "key": "encode-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Rows are already sorted",
+                "text": "The page arrives sorted by `$orderBy`; the next page continues after the last row's key value.",
+                "state": "sorted by orderBy"
+              },
+              {
+                "title": "Take the last row's key",
+                "text": "`end($rows)` is the last row; cast its `$orderBy` value to a string so numeric ids and string slugs both encode cleanly.",
+                "state": "id 8 -> '8'"
+              },
+              {
+                "title": "base64 makes it URL-safe and opaque",
+                "text": "`base64_encode('8')` is `'OA=='` — the cursor the client echoes back with its next request.",
+                "state": "'OA=='"
+              },
+              {
+                "title": "Empty rows close the conversation",
+                "text": "An empty page has no last key, so `next_cursor` returns `null`: there is no next page.",
+                "state": "null"
+              }
+            ],
+            "title": "next_cursor in four moves"
+          }
+        },
+        {
+          "key": "decode-head",
+          "kind": "heading",
+          "title": "Decoding: the null sentinel is sacred"
+        },
+        {
+          "key": "decode-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "`decode_cursor` receives the cursor back. A `null` or empty-string cursor means 'no further page' and **must** decode to `null`, because callers check `=== null` to decide when to stop paginating. A well-formed cursor decodes to the associative array it carries — for example `['id' => 42, 'sort' => 7]`. Anything malformed — invalid base64, or base64 of something that is not JSON — also decodes to `null`."
+          }
+        },
+        {
+          "key": "decode-table",
+          "kind": "table",
+          "payload": {
+            "headers": [
+              "Input",
+              "decode_cursor returns",
+              "Why"
+            ],
+            "rows": [
+              [
+                "null",
+                "null",
+                "sentinel: first page / no next page"
+              ],
+              [
+                "''",
+                "null",
+                "same sentinel — never []"
+              ],
+              [
+                "base64 of {'id':42,'sort':7}",
+                "['id' => 42, 'sort' => 7]",
+                "well-formed cursor decodes to its array"
+              ],
+              [
+                "'!!!not-base64!!!'",
+                "null",
+                "strict base64_decode fails -> false"
+              ],
+              [
+                "base64 of 'hello'",
+                "null",
+                "decodes fine, but 'hello' is not JSON"
+              ]
+            ],
+            "title": "decode_cursor outcomes (verified on PHP 8)",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "decode-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "The broken `decode_cursor` in the debug task returns `[]` for the null or empty-string sentinel. Because callers test `=== null`, the stop condition never fires and clients paginate forever. Return `null` for the sentinel, `null` for malformed input, and a real array only for a real cursor.",
+            "title": "[] for the sentinel means endless pagination"
+          }
+        },
+        {
+          "key": "decode-code",
+          "kind": "code",
+          "payload": {
+            "code": "function decode_cursor(?string $cursor): ?array\n{\n    if ($cursor === null || $cursor === '') {\n        return null;                      // sentinel: no further page\n    }\n\n    $raw = base64_decode($cursor, true);  // strict: false on bad base64\n\n    if ($raw === false) {\n        return null;                      // malformed input\n    }\n\n    $decoded = json_decode($raw, true);\n\n    return is_array($decoded) ? $decoded : null;\n}",
+            "lang": "php",
+            "title": "Reference implementation"
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Both drills share the discipline of the N+1 lesson: make the database do less per request, and make the contract explicit. Eager loading replaces per-row queries with one bulk query per relation; a cursor replaces server-side page state with an explicit token that any stateless node can validate. Between them they cover the read path of a list endpoint that has to survive peak traffic."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "read-replicas-and-pooling",
+      "title": "Spread the database: replicas and pooling",
+      "summary": "A relational primary is single-writer, so scale is a database problem long before it is a server problem. Learn to split reads to replicas with sticky handling of read-your-own-writes, then how PgBouncer pooling fixes connection exhaustion — and which session-level features transaction pooling silently breaks.",
+      "minutes": 10,
+      "difficulty": "hard",
+      "tags": [
+        "database",
+        "read-replicas",
+        "mysql",
+        "sticky",
+        "connection-pooling",
+        "pgbouncer",
+        "postgresql"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The database has a property the app tier does not: a primary is effectively single-writer. Two hard module questions attack the two consequences — reads that must go somewhere else (replicas, with lag) and connections that run out (pooling, with session-state traps). Together they complete the module's database story: count queries down, spread reads out, pool connections in."
+          }
+        },
+        {
+          "key": "writer-head",
+          "kind": "heading",
+          "title": "The single-writer ceiling"
+        },
+        {
+          "key": "writer-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "The app tier scales by adding nodes because requests are independent. The relational database does not scale that way: a primary is single-writer, so all writes funnel into one box with one connection ceiling. The first lever is to split reads off it. With a read/write block in `config/database.php`, Laravel sends writes to the primary and SELECTs to the configured replica host — exactly what you want for read-heavy load — but replication is asynchronous, and that is where the subtle bugs begin."
+          }
+        },
+        {
+          "key": "lag-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Write goes to the primary",
+                "text": "The profile update is executed against the primary database.",
+                "state": "primary updated"
+              },
+              {
+                "title": "Next request reads a replica",
+                "text": "The read/write split routes the SELECT to a replica — which has not yet applied the change.",
+                "state": "old value returned"
+              },
+              {
+                "title": "Seconds later the replica catches up",
+                "text": "Replication applies the write; subsequent reads return the new value.",
+                "state": "new value — eventual visibility"
+              }
+            ],
+            "title": "Why the fresh profile still looks old",
+            "intro": "Replication lag, not a broken connection."
+          }
+        },
+        {
+          "key": "sticky-head",
+          "kind": "heading",
+          "title": "Read-your-own-writes: sticky reads"
+        },
+        {
+          "key": "sticky-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "The idiomatic remedy is per-feature, not global. Setting `sticky => true` inside the read/write block makes Laravel keep a request that performed a write on the primary for the remainder of that same request, so the read-after-my-own-write sequence stays consistent. In recent Laravel versions you can also force one critical query onto the primary with `DB::readWriteConnection()->select(...)`. The limit to state out loud: sticky covers only the same request cycle — the user's next request is a brand new PHP process — so pair it with writing the freshest value through the cache after a write, or accept eventual visibility for non-critical reads."
+          }
+        },
+        {
+          "key": "sticky-code",
+          "kind": "code",
+          "payload": {
+            "code": "// force a single critical read onto the primary, bypassing replicas\n$profile = DB::readWriteConnection()\n    ->select('select * from profiles where user_id = ?', [$id]);",
+            "lang": "php",
+            "title": "One query that must see its own write"
+          }
+        },
+        {
+          "key": "lag-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "Decide per feature which reads must see the user's own write and pin those to the primary; everything else is fine on a replica. Monitor replica lag continuously — `seconds_behind_primary` in MySQL — because a lagging replica serves stale data while pretending to spread load, and during a write-heavy peak lag is usually the first thing to explode.",
+            "title": "Replica reads are stale by design"
+          }
+        },
+        {
+          "key": "pool-head",
+          "kind": "heading",
+          "title": "The other ceiling: connections"
+        },
+        {
+          "key": "pool-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "Many php-fpm workers means many database handles, and every PDO or Doctrine connection is a real TCP socket plus a backend process on the server. PostgreSQL's default `max_connections` (often 100) gets exhausted under load — the classic 'remaining connection slots are reserved' errors. A pooler such as PgBouncer multiplexes thousands of client connections onto a handful of server connections, so the database stops spending capacity on connection setup and stops rejecting clients. The gotcha is the pooling mode."
+          }
+        },
+        {
+          "key": "pool-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Session pooling",
+                "text": "A client keeps its physical server connection for its whole session, so session-level state survives. But the pool needs roughly one server connection per client — it does not remove the ceiling.",
+                "state": "state survives, low fan-in"
+              },
+              {
+                "title": "Transaction pooling",
+                "text": "PgBouncer lends a client a server connection only for the duration of one transaction; the next client may receive the same connection afterwards. Fan-in is huge — and anything session-scoped breaks.",
+                "state": "high fan-in, session state breaks"
+              },
+              {
+                "title": "The symptom pattern",
+                "text": "Random failures that only appear under real load: prepared-statement errors, cache invalidation that silently stops, locks and temp tables that vanish between statements.",
+                "state": "matches the module's bug report"
+              }
+            ],
+            "title": "Session vs transaction pooling"
+          }
+        },
+        {
+          "key": "break-table",
+          "kind": "table",
+          "payload": {
+            "headers": [
+              "Session-level feature",
+              "Symptom under transaction pooling"
+            ],
+            "rows": [
+              [
+                "Server-side prepared statements",
+                "'prepared statement already exists' / 'does not exist'"
+              ],
+              [
+                "LISTEN / NOTIFY",
+                "cache invalidation silently stops working"
+              ],
+              [
+                "Advisory locks",
+                "lock state vanishes when the connection is handed to another client"
+              ],
+              [
+                "Temp tables",
+                "missing for a later statement in the same logical session"
+              ],
+              [
+                "SET session parameters",
+                "reset when the connection is reassigned"
+              ]
+            ],
+            "title": "What transaction pooling breaks",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "remedy-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "The remedies follow from the model: run session pooling mode for the traffic that genuinely needs session state, or give it a dedicated small pool; avoid session-level features in pooled code paths; and make sure the ORM is not holding persistent server-side prepared statements — Laravel's PDO options such as `ATTR_EMULATE_PREPARES`, and Doctrine's configuration, both matter here."
+          }
+        },
+        {
+          "key": "pool-tip",
+          "kind": "callout",
+          "payload": {
+            "tone": "tip",
+            "text": "Connection pooling is the last line of defense for the database. First reduce query count (eager loading, caching), then reduce query cost (indexes), then spread reads (replicas) — only then pool the connections. Buying a pooler to protect a database that is still doing N+1 queries is optimisation in the wrong order.",
+            "title": "Pool after you reduce, not instead of it"
+          }
+        }
+      ]
+    },
+    {
+      "slug": "queues-as-backpressure",
+      "title": "Queues: the backpressure valve",
+      "summary": "When a request must also send mail, call an API and rebuild caches, doing it inline keeps the request open and multiplies database load. Queued jobs return the response fast and let the backlog — not the database — absorb the burst: that backlog is the backpressure mechanism.",
+      "minutes": 8,
+      "difficulty": "medium",
+      "tags": [
+        "queues",
+        "backpressure",
+        "redis",
+        "horizon",
+        "laravel"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The flash-sale checkout must, for every order: persist the order, send a confirmation email, call a loyalty API and regenerate caches. Do all of that synchronously and the HTTP request stays open while database and API load multiply several times per order — and the application falls over. The module question asks for the canonical mechanism; the answer is a queue, and the interesting half of the answer is what the backlog does under overload."
+          }
+        },
+        {
+          "key": "decouple-head",
+          "kind": "heading",
+          "title": "Decouple the fast path from the slow work"
+        },
+        {
+          "key": "decouple-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "Queues exist precisely to separate the fast, critical request path from slow or secondary work. Instead of the HTTP request waiting on SMTP, the loyalty API and cache rebuilds, you dispatch jobs and return the response immediately. In Laravel: the job class implements `ShouldQueue`, you dispatch it — `dispatch(new SendOrderConfirmation($order))` — the queue connection is Redis, and workers pull jobs via `php artisan queue:work` or under Horizon."
+          }
+        },
+        {
+          "key": "job-code",
+          "kind": "code",
+          "payload": {
+            "code": "class SendOrderConfirmation implements ShouldQueue\n{\n    public function __construct(public Order $order)\n    {\n    }\n\n    public function handle(): void\n    {\n        // SMTP, loyalty API, cache rebuilds — the slow work lives here\n    }\n}\n\n// controller: persist the order, dispatch, acknowledge — go home fast\ndispatch(new SendOrderConfirmation($order));",
+            "lang": "php",
+            "title": "A queued job"
+          }
+        },
+        {
+          "key": "backlog-head",
+          "kind": "heading",
+          "title": "The backlog is the backpressure mechanism"
+        },
+        {
+          "key": "backlog-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Requests stay fast",
+                "text": "The request persists the order, dispatches the jobs and returns; the client is not waiting on SMTP or a third-party API.",
+                "state": "fast HTTP response"
+              },
+              {
+                "title": "Workers pull at a sustainable rate",
+                "text": "Workers consume jobs as fast as they safely can. When demand exceeds capacity, jobs simply wait.",
+                "state": "backlog grows"
+              },
+              {
+                "title": "Nothing is lost — the burst is absorbed",
+                "text": "The backlog is the shock absorber: instead of the database collapsing under simultaneous load, demand queues up. You then scale workers and watch Horizon for backlog growth and wait time.",
+                "state": "burst absorbed, not multiplied"
+              },
+              {
+                "title": "Prioritise when it matters",
+                "text": "Put critical jobs on a high-priority queue (orders) ahead of low-priority ones (emails), so the system sheds the right work first.",
+                "state": "orders before emails"
+              }
+            ],
+            "title": "What happens during the spike",
+            "intro": "Workers, not the HTTP request, decide how fast secondary work happens."
+          }
+        },
+        {
+          "key": "sync-table",
+          "kind": "table",
+          "payload": {
+            "headers": [
+              "Aspect",
+              "Synchronous inline",
+              "Queued"
+            ],
+            "rows": [
+              [
+                "Request duration",
+                "waits on SMTP + API + cache rebuilds",
+                "returns after dispatch"
+              ],
+              [
+                "Burst behaviour",
+                "load multiplied per order; DB and API melt",
+                "backlog grows; nothing lost"
+              ],
+              [
+                "Failure handling",
+                "retries re-enter the request path",
+                "workers retry with backoff, off the critical path"
+              ],
+              [
+                "Scaling knob",
+                "bigger boxes, longer timeouts",
+                "more workers, priority queues"
+              ]
+            ],
+            "title": "Inline vs queued, under the flash sale",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "traps-head",
+          "kind": "heading",
+          "title": "The two traps"
+        },
+        {
+          "key": "sync-trap",
+          "kind": "callout",
+          "payload": {
+            "tone": "warning",
+            "text": "`QUEUE_CONNECTION=sync` runs jobs inline, inside the same request — functionally identical to having no queue at all. If a production deploy leaves it set, the flash sale behaves exactly as it did before the refactor: request stays open, load multiplies, workers do not exist.",
+            "title": "QUEUE_CONNECTION=sync is not a queue"
+          }
+        },
+        {
+          "key": "retry-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "The second trap is unbounded synchronous retries: retrying inside the HTTP call multiplies load and creates retry storms, so configure retry counts and backoff and let workers own failures instead. In Symfony the equivalent is Messenger with an async transport and `messenger:consume` workers, plus a retry strategy."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "peak-playbook",
+      "title": "Surviving the spike: capacity, degradation, observability",
+      "summary": "A flash sale at 10x traffic is survived in order: measure first, cut work per request, decouple writes, pre-scale a known peak, then protect the edges. This lesson assembles the module's plan, the circuit-breaker and rate-limiting rules behind graceful degradation, and the metrics-to-traces-to-logs order for triage.",
+      "minutes": 12,
+      "difficulty": "hard",
+      "tags": [
+        "design",
+        "autoscaling",
+        "peak-traffic",
+        "caching",
+        "queues",
+        "redis",
+        "read-replicas",
+        "observability",
+        "metrics",
+        "tracing",
+        "logging",
+        "incident-response",
+        "circuit-breaker",
+        "graceful-degradation",
+        "resilience",
+        "timeouts",
+        "rate-limiting",
+        "fixed-window",
+        "degradation",
+        "boundary",
+        "debugging"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Three of the module's questions and its biggest scenario drill are one playbook. A steady 500 requests-per-second monolith faces a 30-minute flash sale at roughly 10x; a payment provider starts answering in five seconds; at 02:00 the checkout errors climb. The disciplined answer has the same shape every time: measure first, cut work per request, decouple writes, pre-scale a known peak, protect the edges — and when something still degrades, degrade deliberately and watch the right signals."
+          }
+        },
+        {
+          "key": "measure-head",
+          "kind": "heading",
+          "title": "Measure before you spend"
+        },
+        {
+          "key": "measure-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "Most flash-sale collapses are two or three hot queries or one blocking integration — not a shortage of servers. Profile before buying anything: p99 latency, the ten slowest endpoints, database CPU and the slow-query log, current replica lag and queue backlog. A plan that starts with numbers, not with provisioning, is the first senior signal."
+          }
+        },
+        {
+          "key": "cut-head",
+          "kind": "heading",
+          "title": "Cut work per request"
+        },
+        {
+          "key": "cut-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "- Run `php artisan optimize` (config, route and view caches) and enable opcache.\n- Cache hot reads aggressively with `Cache::remember` against Redis — product pages, stock counts.\n- Enable HTTP or edge caching via a CDN for anonymous catalog pages.\n- Eager-load to kill N+1 problems, and index the hot queries.\nThese are the earlier lessons applied in order, and none of them costs a new server."
+          }
+        },
+        {
+          "key": "decouple-head",
+          "kind": "heading",
+          "title": "Decouple the write path"
+        },
+        {
+          "key": "decouple-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "The request must only persist the order and acknowledge. Emails, receipts, inventory decrements and loyalty calls go onto Redis queues with enough workers under Horizon, and read traffic spreads to replicas where staleness is tolerable — sticky reads where it is not. The queue backlog is now your spare capacity: when it grows, add workers; when it shrinks, the burst is over."
+          }
+        },
+        {
+          "key": "capacity-head",
+          "kind": "heading",
+          "title": "Capacity for a known peak"
+        },
+        {
+          "key": "capacity-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Metric-based autoscaling lags",
+                "text": "Launching and warming a node takes minutes — the wrong timescale for a 30-minute sale with a known start.",
+                "state": "minutes to warm a node"
+              },
+              {
+                "title": "Pre-scale ahead of T-0",
+                "text": "For a predictable peak, scale out beforehand using time-based or manual scaling. Have the capacity there when traffic arrives, not arriving with it.",
+                "state": "time-based / manual before T-0"
+              },
+              {
+                "title": "Let metrics handle only the overflow",
+                "text": "After the pre-scale, CPU- or queue-depth-based rules add the unexpected remainder — and only that remainder.",
+                "state": "metric rules = overflow only"
+              },
+              {
+                "title": "Scale in carefully, load-test first",
+                "text": "Configure scale-in so you do not shed capacity mid-tail, and load-test at the expected 10x (k6 or similar) before the event — especially checkout.",
+                "state": "no shedding mid-tail"
+              }
+            ],
+            "title": "The autoscaling subtlety interviewers want"
+          }
+        },
+        {
+          "key": "dont",
+          "kind": "callout",
+          "payload": {
+            "tone": "warning",
+            "text": "State what you would not do — the module rewards it. Do not buy a bigger database before measuring; do not extract microservices to prepare for a traffic event (traffic alone never justifies splitting — that is the monolith lesson); do not let a slow dependency dictate your timeouts; and do not shed capacity mid-tail during scale-in.",
+            "title": "The do-not list"
+          }
+        },
+        {
+          "key": "degrade-head",
+          "kind": "heading",
+          "title": "Degrade deliberately"
+        },
+        {
+          "key": "degrade-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "Graceful degradation means the system keeps serving users with reduced but correct function when a dependency degrades, instead of collapsing in a cascade. The failure mode to prevent is worker and connection exhaustion: one slow provider call can occupy a php-fpm worker and a database connection for its full timeout, and enough of those exhaust the pool healthy requests need — which is how a single slow dependency takes down an entire application."
+          }
+        },
+        {
+          "key": "breaker-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Closed — passing",
+                "text": "While the provider behaves, calls pass through. Failures accumulate against a threshold over a window.",
+                "state": "calls pass; failures counted"
+              },
+              {
+                "title": "Open — fail fast",
+                "text": "Past the threshold the breaker opens: requests fail locally, in milliseconds, without touching the provider — no request occupies a worker for five seconds waiting on a sick dependency.",
+                "state": "fail fast locally"
+              },
+              {
+                "title": "Half-open — probe",
+                "text": "After a cooldown the breaker lets limited traffic through to test the provider. Success closes it; failure re-opens it.",
+                "state": "limited probe traffic"
+              }
+            ],
+            "title": "The circuit breaker's three states",
+            "intro": "Closed, open, half-open — Fowler's model, verbatim in the module."
+          }
+        },
+        {
+          "key": "degrade-table",
+          "kind": "table",
+          "payload": {
+            "headers": [
+              "Practice",
+              "Verdict",
+              "Why"
+            ],
+            "rows": [
+              [
+                "Circuit breaker around the flaky provider",
+                "correct",
+                "failing requests fail fast instead of occupying workers and connections for the full timeout"
+              ],
+              [
+                "Cached fallbacks, UI marked as degraded",
+                "correct",
+                "users keep a correct read-only experience while the dependency is down (stale-while-revalidate)"
+              ],
+              [
+                "Provider work behind a queue with retry and backoff",
+                "correct",
+                "the API acknowledges quickly where the flow allows it"
+              ],
+              [
+                "Retry synchronously up to 20 times in the request",
+                "failure amplifier",
+                "multiplies load and creates a retry storm — the thundering herd — while blocking workers"
+              ],
+              [
+                "Raise PHP execution timeouts to 300 s",
+                "failure amplifier",
+                "a slow dependency becomes guaranteed worker exhaustion"
+              ]
+            ],
+            "title": "Degrade correctly vs amplify the failure",
+            "note": "Laravel specifics: `Http::timeout(3)->retry(3, 100)` with exponential backoff and jitter; circuit breakers are not built into the framework, so implement a small Redis-based one (atomic failure counters over a window tripping a cache flag) or use a package; queue workers get max attempts and backoff; and always set timeouts plus idempotency keys so retried payments cannot double-charge. Symfony equivalents: HttpClient retry middleware, Messenger retry strategies.",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "rate-head",
+          "kind": "heading",
+          "title": "Rate limiting: the fixed-window rule"
+        },
+        {
+          "key": "rate-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "The module's two rate-limiting drills encode the counting rule behind 'degrade deliberately'. `rate_limit_ok($timestamps, $limit, $windowSeconds, $now)` asks one question: would a request at `$now` still be inside the limit? Count the previous timestamps **strictly inside** the window — those with `t > $now - $windowSeconds` — and allow the request only when that count is below the limit. This is the rule per-tenant rate limiting enforces in production so one noisy tenant cannot take the whole API down."
+          }
+        },
+        {
+          "key": "rate-code",
+          "kind": "code",
+          "payload": {
+            "code": "function rate_limit_ok(array $timestamps, int $limit, int $windowSeconds, int $now): bool\n{\n    $windowStart = $now - $windowSeconds;\n\n    $count = 0;\n    foreach ($timestamps as $t) {\n        if ($t > $windowStart) {   // strictly inside the window\n            $count++;\n        }\n    }\n\n    return $count < $limit;\n}",
+            "lang": "php",
+            "title": "Reference implementation"
+          }
+        },
+        {
+          "key": "rate-table",
+          "kind": "table",
+          "payload": {
+            "headers": [
+              "Timestamps",
+              "Limit / window",
+              "Verdict",
+              "Why"
+            ],
+            "rows": [
+              [
+                "[]",
+                "2 per 60 s, now = 100",
+                "true",
+                "nothing to count"
+              ],
+              [
+                "[50, 55]",
+                "2 per 60 s, now = 100",
+                "false",
+                "two requests inside the window — at the limit"
+              ],
+              [
+                "[10, 55]",
+                "2 per 60 s, now = 100",
+                "true",
+                "the request at t=10 expired (10 is not > 40)"
+              ],
+              [
+                "[40]",
+                "1 per 60 s, now = 100",
+                "true",
+                "a request exactly at the window edge has expired"
+              ],
+              [
+                "[41]",
+                "1 per 60 s, now = 100",
+                "false",
+                "41 is inside the window and fills the limit"
+              ],
+              [
+                "[60, 80]",
+                "3 per 60 s, now = 100",
+                "true",
+                "two counted, below the limit of three"
+              ]
+            ],
+            "title": "rate_limit_ok outcomes (verified on PHP 8)",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "rate-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "The debug twin compares `t >= $windowStart` instead of `t > $windowStart`, so a request exactly at the window edge is counted as in-window and a client that should be allowed is wrongly throttled. The edge has already expired by definition: `$windowStart = $now - $windowSeconds` is not part of the window.",
+            "title": "The boundary bug: >= instead of >"
+          }
+        },
+        {
+          "key": "observe-head",
+          "kind": "heading",
+          "title": "Observe: metrics, then traces, then logs"
+        },
+        {
+          "key": "observe-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "When checkout errors climb at 02:00, the team's first instinct — grep the logs for 'error' — is the wrong first signal. Logs are high-volume and low-signal, and without a shared identifier you cannot correlate one logical request across the app, Redis, the queue and the database. The disciplined order: start from aggregated metrics (error rate, p99 latency against your SLO, queue backlog, database connections, replica lag — the RED and USE models), open one representative failing or slow trace to see the actual request path and the single hop that blows up, and only then use that trace's correlation ID to pull the few relevant log lines."
+          }
+        },
+        {
+          "key": "correlate-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "Making that possible is an engineering task, and it is the real interview answer: a middleware that generates a request ID and adds it to every log context — Laravel: `Log::withContext(['request_id' => $id])`; Symfony: a monolog processor — carries it into outgoing calls, and forwards it to queued jobs so async work stays traceable to the HTTP request that spawned it. The Laravel assets that make the dashboards real: Horizon exposes queue backlog and wait time, enable the slow-query log, and sample traces at high volume while keeping 100% of errors."
+          }
+        },
+        {
+          "key": "signal-table",
+          "kind": "table",
+          "payload": {
+            "headers": [
+              "Signal",
+              "What it reveals",
+              "What it drives"
+            ],
+            "rows": [
+              [
+                "Queue depth",
+                "backpressure vs worker capacity",
+                "scale workers; shed or delay low-priority jobs"
+              ],
+              [
+                "Replica lag",
+                "replicas serving stale data",
+                "fall reads back to the primary"
+              ],
+              [
+                "Cache hit ratio",
+                "is the cache strategy working",
+                "TTLs, warming, stampede checks"
+              ],
+              [
+                "p95 latency and error rate",
+                "health against the SLO",
+                "circuit breakers, dashboards, alerts, runbook"
+              ]
+            ],
+            "title": "The monitoring matrix from the scenario drill",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "That is the whole playbook, in order: measure, cut work, decouple writes, pre-scale a known peak, protect the edges, degrade deliberately, observe. The scenario task asks for exactly this and its rubric rewards naming the metrics — queue depth, replica lag, cache hit ratio, p95 latency, error rate — wired to dashboards and alerts, with a runbook rehearsed before the spike."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "monolith-vs-microservices",
+      "title": "Monolith first: when splitting services pays",
+      "summary": "A stateless monolith scales behind a load balancer exactly like a set of services — so traffic alone never justifies microservices. Learn the modular-monolith default, the concrete drivers that do justify extraction, the costs of splitting, and how to sequence an extraction safely when one is warranted.",
+      "minutes": 9,
+      "difficulty": "medium",
+      "tags": [
+        "architecture",
+        "monolith",
+        "microservices",
+        "modular-monolith",
+        "design",
+        "database-bottleneck",
+        "laravel"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "A product company with roughly ten engineers is preparing for a marketing event; several engineers argue for microservices so each service can scale independently. In the second scenario a CTO wants checkout extracted because the shared MySQL primary is the bottleneck. Both module questions end at the same place: traffic alone never justifies microservices. This lesson gives you the mainstream senior position — modular monolith by default — and the honest list of what splitting actually costs."
+          }
+        },
+        {
+          "key": "not-head",
+          "kind": "heading",
+          "title": "A monolith is not a scaling problem"
+        },
+        {
+          "key": "not-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "Laravel and Symfony applications are stateless per request, so a well-built monolith scales horizontally behind a load balancer exactly like a set of services would. A traffic spike is handled with replicas, caching, queues and database headroom — none of which require splitting code. Keep that sentence; it answers half the architecture questions in any interview."
+          }
+        },
+        {
+          "key": "default-head",
+          "kind": "heading",
+          "title": "The modular monolith default"
+        },
+        {
+          "key": "default-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "Mainstream senior guidance — Martin Fowler's MonolithFirst argument and his microservice trade-offs — is to default to a **modular monolith**: one deployable with explicit internal boundaries, bounded contexts, disciplined namespaces and controlled dependencies between modules. In Laravel terms it stays one Octane-friendly artifact that deploys as one unit. Extract a service only when a concrete driver appears: a team large enough that ownership conflicts and release coupling hurt (Conway's law — architecture copies communication structure); a part needing genuinely different scaling or runtime characteristics; an isolation requirement such as security or regulation; or an independent release cadence."
+          }
+        },
+        {
+          "key": "cost-head",
+          "kind": "heading",
+          "title": "What splitting actually costs"
+        },
+        {
+          "key": "cost-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "Splitting has real costs, and the interview answer states them explicitly: network failure modes; distributed data and consistency — an ACID transaction cannot span services, so you inherit sagas and eventual consistency; joins across services that must be re-architected with data ownership and possibly CQRS read models; observability overhead; duplicated auth and catalog lookups; and N deploy pipelines, dashboards and runbooks to operate. A nine-person team running several services feels that overhead quickly."
+          }
+        },
+        {
+          "key": "driver-table",
+          "kind": "table",
+          "payload": {
+            "headers": [
+              "Stated problem",
+              "Does extraction fix it?",
+              "What actually helps"
+            ],
+            "rows": [
+              [
+                "Shared MySQL primary is the bottleneck",
+                "no — still one writer, same locks, same connection ceiling, plus a network hop",
+                "caching, read replicas, queues, indexing, pooling"
+              ],
+              [
+                "Nine engineers squabble over one deploy pipeline",
+                "no — now you have several pipelines",
+                "monorepo conventions, module ownership, feature flags"
+              ],
+              [
+                "One part needs a genuinely different scaling profile",
+                "yes",
+                "extract that part with its own data and runtime"
+              ],
+              [
+                "Security or regulatory isolation for a module",
+                "yes",
+                "a service boundary with its own deployment"
+              ],
+              [
+                "A marketing event will spike traffic",
+                "no — scale the monolith",
+                "the peak playbook: cache, queues, pre-scale, degrade, observe"
+              ]
+            ],
+            "title": "Does extraction fix it?",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "conway",
+          "kind": "callout",
+          "payload": {
+            "tone": "why",
+            "text": "Why the team-size driver is the real one: Conway's law says systems copy the communication structure of the organisation. When ten engineers argue over one deploy pipeline, splitting the code along the arguing lines does not remove the argument — it gives every side its own pipeline to ship broken integrations with. Fix the pipeline problem with ownership and conventions first.",
+            "title": "Architecture mirrors communication"
+          }
+        },
+        {
+          "key": "sequence-head",
+          "kind": "heading",
+          "title": "If you still split, sequence it"
+        },
+        {
+          "key": "sequence-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Pick a hard boundary",
+                "text": "Choose a service with a clear API and a boundary that already exists inside the monolith's modules.",
+                "state": "hard boundary, clear API"
+              },
+              {
+                "title": "Give it its own data",
+                "text": "Own tables and data ownership — never share the database with the caller.",
+                "state": "own schema, no shared DB"
+              },
+              {
+                "title": "Move side effects to async events",
+                "text": "Publish events instead of calling across synchronously; the event log becomes the contract.",
+                "state": "async events"
+              },
+              {
+                "title": "Follow the strangler pattern",
+                "text": "Route traffic to the new service incrementally while the monolith keeps serving the rest.",
+                "state": "incremental cutover"
+              },
+              {
+                "title": "Start with the easy slice",
+                "text": "Begin with a read-heavy or integration-heavy slice — not the write-critical checkout core.",
+                "state": "read / integration slice first"
+              }
+            ],
+            "title": "Extraction done safely"
+          }
+        },
+        {
+          "key": "warn",
+          "kind": "callout",
+          "payload": {
+            "tone": "warning",
+            "text": "Extracting checkout while it still reads and writes the shared MySQL changes nothing about the bottleneck — there is still one writer, the same locks and the same connection ceiling — and you have added a network hop, serialization overhead and a second deployable for free. Database pressure is relieved with caching, replicas, queues, indexing and pooling, not with service boundaries.",
+            "title": "Splitting around the same database changes nothing"
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "So the two monolith questions have one model answer: stay a modular monolith; fix the database; fix the pipeline with conventions, ownership and feature flags; and extract only when a genuine driver appears — then extract safely, data first, strangler-style. The moment you split, you trade single-request transactions for distributed headaches; traffic alone never justifies that trade."
+          }
+        }
+      ]
+    }
+  ]
+}

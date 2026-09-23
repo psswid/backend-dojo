@@ -1,0 +1,1497 @@
+{
+  "topic_slug": "queues-failed-jobs",
+  "lessons": [
+    {
+      "slug": "queue-dispatch-basics",
+      "title": "Why queue work: latency, decoupling and dispatch",
+      "summary": "The module opens with a CSV import that triggers per-row processing and end-user emails, and asks why that work should leave the HTTP request. This lesson rebuilds the sync-versus-async decision, what the ShouldQueue marker actually changes, and how to delay a job - the ideas behind the module's three easy queue quiz questions.",
+      "minutes": 8,
+      "difficulty": "easy",
+      "tags": [
+        "queues",
+        "architecture",
+        "shouldqueue",
+        "delayed jobs"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The module opens with an endpoint that imports a CSV: per-row processing plus email notifications to end users. The first three quiz questions - why hand that work to a queue, what `ShouldQueue` actually changes, and how `delay()` works - all reduce to one model: a job is **work scheduled for another process**, and the framework only changes when and where your code runs. This lesson makes that model automatic."
+          }
+        },
+        {
+          "key": "why",
+          "kind": "heading",
+          "title": "Latency and decoupling: what a queue is for"
+        },
+        {
+          "key": "why-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Doing heavy work synchronously inside a request costs you twice. First, latency: the caller waits for the whole import, and browsers, API clients and proxies time out. Second, worker occupancy: the PHP-FPM or Octane process handling that request is tied up for the entire duration of the work.\n\nThe architectural fix is decoupling. The controller does the minimum and dispatches a job; a separate worker process (`php artisan queue:work`, or Horizon) consumes it later, possibly on a different machine and at a different scale than the web tier."
+          }
+        },
+        {
+          "key": "fig-compare",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-flow\">\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-c\">without a queue<span class=\"tag\">sync</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-r\">import + emails inside the request</span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-r\">response only after the work</span>\n    <span class=\"ld-note\">user waits; proxies time out</span>\n  </div>\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-a\">with a queue<span class=\"tag\">async</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-a\">dispatch job, respond in ms</span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-b\">worker runs it later</span>\n    <span class=\"ld-note\">queue:work or Horizon</span>\n  </div>\n</div>",
+            "title": "Sync vs async: what the queue moves out of the request",
+            "caption": "Same work, two execution strategies. In Symfony Messenger this is the async transport versus the sync transport routing decision."
+          }
+        },
+        {
+          "key": "tradeoff-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The trade-off is **eventual consistency**: the response returns before the work is done, so nothing may assume the side effects have already happened. When the UI or an API client must reflect completion, add a status mechanism - persist the job id or batch id, expose batch progress, or fire a webhook when the import finishes.\n\nThe compensating win is reliability: a failed job is retried later with `queue:retry`, after the user has long since received their response - never as an error page in the middle of their request."
+          }
+        },
+        {
+          "key": "buffer-callout",
+          "kind": "callout",
+          "payload": {
+            "tone": "why",
+            "title": "The queue is a buffer, not a guarantee of success",
+            "text": "The queue absorbs bursts, so the web tier never blocks on slow downstream systems and producers and consumers can scale independently. Interview phrasing that lands: queues do not eliminate failures - they move them out of the request and manage them (retries, failed jobs) inside their own lifecycle."
+          }
+        },
+        {
+          "key": "shouldqueue",
+          "kind": "heading",
+          "title": "ShouldQueue: the marker that changes execution"
+        },
+        {
+          "key": "marker-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`ShouldQueue` is an **empty marker interface - no methods at all**. A job class opts in by listing it in its declaration, and the marker tells the dispatcher to push the job onto the configured queue connection (the `QUEUE_CONNECTION` default in `config/queue.php`) instead of invoking `handle()` inline.\n\nThe same contract applies to mailables, notifications, broadcast events and event listeners that implement `ShouldQueue`: the dispatch call stays identical, only the execution strategy changes."
+          }
+        },
+        {
+          "key": "job-code",
+          "kind": "code",
+          "payload": {
+            "lang": "php",
+            "title": "A job class and its dispatch",
+            "code": "use Illuminate\\Bus\\Queueable;\nuse Illuminate\\Contracts\\Queue\\ShouldQueue;\nuse Illuminate\\Foundation\\Bus\\Dispatchable;\nuse Illuminate\\Queue\\InteractsWithQueue;\nuse Illuminate\\Queue\\SerializesModels;\n\nclass ImportCsvRows implements ShouldQueue\n{\n    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;\n\n    public function __construct(public int $importId) {}\n\n    public function handle(): void\n    {\n        // parse the CSV, insert rows, email each user…\n    }\n}\n\n// Controller: the dispatch call is one line either way.\nImportCsvRows::dispatch($importId);"
+          }
+        },
+        {
+          "key": "sync-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Remove `ShouldQueue` from the class, or set `QUEUE_CONNECTION=sync`, and the very same `dispatch()` runs `handle()` immediately in the current process. That is why tests lean on the sync behaviour: swap the driver or use `Queue::fake()`, then `assertPushed(ImportCsvRows::class)` verifies the job was queued - without executing its side effects."
+          }
+        },
+        {
+          "key": "marker-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "ShouldQueue implies nothing about retries or failure storage",
+            "text": "The marker only decides where the job runs. Retrying and failure persistence are separate machinery: a job is retried only if it fails before exhausting its `$tries` / `$backoff` / `retryUntil` budget, and it is written to the `failed_jobs` table only after those attempts run out. Do not assume queued means will eventually succeed - the rest of this module builds exactly that machinery."
+          }
+        },
+        {
+          "key": "delayed",
+          "kind": "heading",
+          "title": "Delayed dispatch: dispatch()->delay()"
+        },
+        {
+          "key": "delayed-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "Roughly 15 minutes after dispatch",
+            "steps": [
+              {
+                "title": "The canonical form",
+                "text": "`dispatch()` returns a pending-dispatch object and `delay()` is called **on it**. `delay()` accepts a `DateTimeInterface` or a plain number of seconds, so `ProcessReport::dispatch()->delay(now()->addMinutes(15))` and `ProcessReport::dispatch()->delay(900)` are equivalent.",
+                "state": "runs about 15 min after dispatch"
+              },
+              {
+                "title": "The traps in the quiz",
+                "text": "`ProcessReport::dispatch(15)` just passes `15` to the constructor, and forms that put `delay()` before `dispatch()` treat it as a static factory. `delay()` is not a static method on the job class - it lives on the object that `dispatch()` returns.",
+                "state": "delay() must follow dispatch()"
+              },
+              {
+                "title": "Where the wait is stored",
+                "text": "Delayed jobs stay in the queue until their time arrives: the database driver writes an `available_at` column, Redis keeps a sorted set keyed by score. Workers never see the job before that moment.",
+                "state": "not delivered until the time passes"
+              },
+              {
+                "title": "What delayed dispatch is for",
+                "text": "Reminders, a cool-down window after signup, or spreading load away from a spike. In Symfony Messenger the same idea is a `DelayStamp` on the envelope or a transport-level `delay` option.",
+                "state": "same goal, different API"
+              }
+            ]
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Hold on to the one-liner: a queue trades a synchronous guarantee for latency, decoupling and retryability. The next lesson picks the storage behind that guarantee - the drivers - and the lessons after it add attempts, timeouts and the failed-job lifecycle. The quiz questions for this family link automatically in the practice block below."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "queue-drivers",
+      "title": "Choosing a queue driver: database, Redis, SQS, sync",
+      "summary": "There is no best queue driver, only trade-offs. Compare the database, Redis, SQS and sync drivers on throughput, operational cost and duplicate risk, so you can defend a driver choice the way the module's quiz expects.",
+      "minutes": 8,
+      "difficulty": "medium",
+      "tags": [
+        "queues",
+        "queue drivers",
+        "redis",
+        "sqs"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Pick the wrong driver and you will operate infrastructure forever; pick the right one and the queue is invisible. The driver quiz question is a classic senior trade-off: all four options are defensible in different shops, and the skill is knowing what each driver trades away. This lesson turns the module's driver matrix into decision rules."
+          }
+        },
+        {
+          "key": "matrix",
+          "kind": "heading",
+          "title": "The four drivers in one matrix"
+        },
+        {
+          "key": "matrix-table",
+          "kind": "table",
+          "payload": {
+            "title": "Driver comparison, straight from the module quiz",
+            "headers": [
+              "Driver",
+              "Where jobs wait",
+              "How workers get work",
+              "Strengths",
+              "Watch-outs"
+            ],
+            "rows": [
+              [
+                "`database`",
+                "a `jobs` table in MySQL/Postgres",
+                "polling",
+                "zero extra services; durable in a real table; atomic row reservation",
+                "polling wastes cycles and adds latency; fine for modest volume"
+              ],
+              [
+                "`redis`",
+                "Redis lists; a sorted set for delayed jobs",
+                "blocking pop - workers sleep, not poll",
+                "very fast; the foundation for Horizon",
+                "lives in memory; needs AOF/RDB persistence to survive a restart; another service to operate"
+              ],
+              [
+                "`sqs`",
+                "a managed AWS queue over HTTP",
+                "worker receive calls",
+                "scales without you operating a broker",
+                "at-least-once delivery; per-request cost; tune visibility timeout and a DLQ"
+              ],
+              [
+                "`sync`",
+                "nowhere - runs inline",
+                "no worker involved",
+                "perfect for development and tests",
+                "never for production throughput"
+              ]
+            ],
+            "note": "The visibility-timeout and DLQ terms get their own lessons; here they are just watch-out labels.",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "database",
+          "kind": "heading",
+          "title": "database: durable, but workers must poll"
+        },
+        {
+          "key": "database-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The database driver stores jobs in a real table, so nothing is lost when a worker restarts and you add zero infrastructure. Modern Laravel reserves rows atomically (`SELECT ... FOR UPDATE SKIP LOCKED`), so two workers never claim the same job, and delayed jobs wait on an `available_at` column.\n\nThe catch is polling: workers repeatedly ask anything to do?, which burns cycles and adds latency. This driver is a good fit for modest volume and for teams that do not want to operate Redis."
+          }
+        },
+        {
+          "key": "redis",
+          "kind": "heading",
+          "title": "redis: fast, blocking, and the base for Horizon"
+        },
+        {
+          "key": "redis-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Redis gives very fast atomic list operations and **blocking pops**, so workers sleep until work arrives instead of polling. It is also the required foundation for Horizon, Laravel's Redis-based queue dashboard.\n\nThe trade-offs: the queue lives in Redis memory, so without AOF or RDB persistence a Redis restart can lose pending jobs - and you now operate another service. Note the delivery model too: Redis lists, like standard SQS, deliver at-least-once."
+          }
+        },
+        {
+          "key": "redis-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "Speed is not durability",
+            "text": "On a default Redis with no persistence, a restart can drop pending jobs that were still in the queue. If losing a queued message is worse than losing a few milliseconds, enable AOF/RDB - or pick the database driver whose storage is already durable. This exact trade-off is why the module's Horizon question pairs Redis with supervision tooling."
+          }
+        },
+        {
+          "key": "sqs",
+          "kind": "heading",
+          "title": "sqs: managed, at-least-once, pay per request"
+        },
+        {
+          "key": "sqs-text",
+          "kind": "prose",
+          "payload": {
+            "text": "SQS is fully managed and HTTP-based: it scales without you running a broker, and you pay per request. Two consequences are yours to own. Delivery is **at-least-once** - a message can arrive more than once, so consumers must tolerate duplicates. And you must tune the visibility timeout and, optionally, a dead-letter queue.\n\nBoth mechanisms get the full treatment in this module's delivery-semantics lesson. Here, remember the terms."
+          }
+        },
+        {
+          "key": "choose-callout",
+          "kind": "callout",
+          "payload": {
+            "tone": "why",
+            "title": "Choose on throughput, ops budget and duplicate tolerance",
+            "text": "The decision rule from the module: weigh throughput needs, how much operational budget you have (Redis means running another service; SQS means a vendor and per-request cost), and how much duplicate-execution risk your side effects can tolerate. Money-moving jobs need idempotent consumers on any driver; duplicate-tolerant jobs can run on the cheapest thing that works."
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Driver mechanics return later: `retry_after` on the redis connection anchors the timeout lesson, and SQS's visibility timeout plus the dead-letter queue are the spine of the final lesson. When the quiz asks which statement is accurate, answer with the trade-offs, not the slogans."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "attempts-retries-backoff",
+      "title": "Attempts, retries and backoff schedules",
+      "summary": "How many times does a job run, and how long does it wait between runs? Walk the $tries and $backoff semantics behind the module's retry quiz question, then apply them to the four plain-PHP drills (backoff_delay, should_retry, backoff_plan and their debug twins).",
+      "minutes": 12,
+      "difficulty": "medium",
+      "tags": [
+        "queues",
+        "retries",
+        "backoff",
+        "off-by-one",
+        "schedule",
+        "debugging",
+        "symfony messenger"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The module's retry family is one quiz question plus four coding drills. The quiz asks about `public $tries = 5; public $backoff = [10, 30, 60];` - how many attempts, and what waits between them? The drills (`backoff_delay`, `should_retry` and its debug twin, `backoff_plan` and its debug twin) ask for the same numbers without the framework. Learn the Laravel semantics once and every drill becomes arithmetic."
+          }
+        },
+        {
+          "key": "tries",
+          "kind": "heading",
+          "title": "Attempts: $tries counts the first run"
+        },
+        {
+          "key": "tries-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`$tries` is a hard cap on **total attempts including the first run** - a job with `$tries = 5` executes at most five times. Each time `handle()` throws while budget remains, the worker counts the attempt, holds the job for the configured backoff, and releases it back to the queue for another run. When the final attempt throws, the job is marked failed instead of being released again: it is written to `failed_jobs` and handed to `failed()`."
+          }
+        },
+        {
+          "key": "tries-table",
+          "kind": "table",
+          "payload": {
+            "title": "A job with $tries = 5 and $backoff = [10, 30, 60], from first run to failed_jobs",
+            "headers": [
+              "Attempt",
+              "What happens",
+              "Wait before the next attempt"
+            ],
+            "rows": [
+              [
+                "1",
+                "`handle()` throws; budget remains",
+                "10 s"
+              ],
+              [
+                "2",
+                "`handle()` throws; budget remains",
+                "30 s"
+              ],
+              [
+                "3",
+                "`handle()` throws; budget remains",
+                "60 s"
+              ],
+              [
+                "4",
+                "`handle()` throws; budget remains",
+                "60 s - the array is exhausted, Laravel reuses its last value"
+              ],
+              [
+                "5",
+                "`handle()` throws; budget exhausted",
+                "none - the job moves to failed_jobs and `failed()` runs"
+              ]
+            ],
+            "note": "Four waits for five attempts: there is no wait after the final attempt. The wait sequence is 10, 30, 60, 60 - exactly what the quiz's correct option states.",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "timebox-tip",
+          "kind": "callout",
+          "payload": {
+            "tone": "tip",
+            "title": "Time-based budgets: retryUntil() overrides $tries",
+            "text": "For genuinely time-based jobs, implement `retryUntil()` and it overrides `$tries` entirely: Laravel keeps trying while the returned timestamp is in the future (for example, an external import window that closes), and a `retryUntil()` returning a past timestamp cancels further attempts and fails the job. The module's scenario task uses exactly this shape for a 30-minute deadline."
+          }
+        },
+        {
+          "key": "backoff",
+          "kind": "heading",
+          "title": "Backoff: how long between attempts"
+        },
+        {
+          "key": "backoff-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`$backoff` controls how long the job is released before its **next** attempt - the wait column of the table above. A static array is a poor-man's exponential curve; an integer means the same wait every time; a `backoff()` method is the dynamic form the module's scenario solution uses to return an exponential sequence like `[5, 15, 60, 300]`.\n\nWhen an array is shorter than the remaining retries, Laravel repeats its **last** element - that is what turns `[10, 30, 60]` into waits of 10, 30, 60 and then 60 again."
+          }
+        },
+        {
+          "key": "backoff-code",
+          "kind": "code",
+          "payload": {
+            "lang": "php",
+            "title": "$tries and $backoff on one job",
+            "code": "class CallBillingApi implements ShouldQueue\n{\n    public $tries = 5;              // total attempts, first run included\n    public $backoff = [10, 30, 60]; // wait before attempts 2, 3, 4, then 60 s again\n\n    public function handle(): void\n    {\n        // Throwing here = one failed attempt. With budget left the job is\n        // released and retried later; after attempt 5 it goes to failed_jobs.\n    }\n}"
+          }
+        },
+        {
+          "key": "drills",
+          "kind": "heading",
+          "title": "The plain-PHP drills: retry budgets as functions"
+        },
+        {
+          "key": "drills-intro",
+          "kind": "prose",
+          "payload": {
+            "text": "Strip the framework and the rules stay identical: attempts are 1-based, budgets include the first run, and a retry schedule has exactly `maxAttempts - 1` waits - one before each retry, none after the final attempt. The drills below are the module's own tasks, and the numbers in them were verified against PHP 8."
+          }
+        },
+        {
+          "key": "delay-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "backoff_delay($attempt): doubling delay, hard cap at 3600 s",
+            "steps": [
+              {
+                "title": "Doubling from 2 s",
+                "text": "`$attempt` is 1-based and names the first retry at 1. The delay doubles with every attempt, starting at 2 s: attempt 1 returns 2, attempt 5 returns 32, attempt 10 returns 1024.",
+                "state": "2, 4, 8, 16, 32, …, 1024"
+              },
+              {
+                "title": "The 3600 s cap",
+                "text": "At attempt 12 the uncapped value (two to the power of 12 = 4096) would exceed the cap, so the answer clamps to 3600 - and stays there for every larger attempt. The whole solution is `min(raw, 3600)`.",
+                "state": "backoff_delay(12) = 3600, backoff_delay(100) = 3600"
+              }
+            ]
+          }
+        },
+        {
+          "key": "delay-code",
+          "kind": "code",
+          "payload": {
+            "lang": "php",
+            "title": "Reference solution and verified outputs",
+            "code": "function backoff_delay(int $attempt): int\n{\n    // $attempt is 1-based: 1 = the first retry.\n    return min(2 ** $attempt, 3600);\n}\n\nbackoff_delay(1);   // 2\nbackoff_delay(5);   // 32\nbackoff_delay(10);  // 1024\nbackoff_delay(12);  // 3600  (2 ** 12 = 4096, capped)\nbackoff_delay(100); // 3600  (the cap holds forever)"
+          }
+        },
+        {
+          "key": "retry-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "should_retry($attempt, $maxAttempts): the boundary is off by one",
+            "steps": [
+              {
+                "title": "Retry only while budget remains",
+                "text": "`$attempt` counts runs that already happened (1-based); `$maxAttempts` is the total budget including the first run. There is budget for another run exactly while the current attempt is **strictly below** the maximum.",
+                "state": "should_retry(2, 3) returns true"
+              },
+              {
+                "title": "The planted bug",
+                "text": "The debug twin starts from `$attempt <= $maxAttempts`, which grants one attempt too many: when the current attempt already equals the maximum, retrying would exceed the budget. The fix is one character - strict less-than.",
+                "state": "should_retry(3, 3) must be false; <= says true"
+              },
+              {
+                "title": "Single-shot jobs",
+                "text": "`maxAttempts = 1` means run once and never retry, so `should_retry(1, 1)` must be false.",
+                "state": "1 attempt total, 0 retries"
+              }
+            ]
+          }
+        },
+        {
+          "key": "retry-table",
+          "kind": "table",
+          "payload": {
+            "title": "The boundary in every test case",
+            "headers": [
+              "$attempt",
+              "$maxAttempts",
+              "Budget left for another run?",
+              "should_retry"
+            ],
+            "rows": [
+              [
+                "1",
+                "3",
+                "yes",
+                "true"
+              ],
+              [
+                "2",
+                "3",
+                "yes",
+                "true"
+              ],
+              [
+                "3",
+                "3",
+                "no - this run is the last",
+                "false"
+              ],
+              [
+                "4",
+                "3",
+                "no - already over budget",
+                "false"
+              ],
+              [
+                "1",
+                "1",
+                "no - single shot",
+                "false"
+              ]
+            ],
+            "mono": [
+              0,
+              1
+            ]
+          }
+        },
+        {
+          "key": "retry-code",
+          "kind": "code",
+          "payload": {
+            "lang": "php",
+            "title": "Reference solution",
+            "code": "function should_retry(int $attempt, int $maxAttempts): bool\n{\n    // $attempt has already run (1-based); retry only while budget remains.\n    return $attempt < $maxAttempts;\n}"
+          }
+        },
+        {
+          "key": "plan-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "backoff_plan($maxAttempts, $baseSeconds, $capSeconds): the whole schedule",
+            "steps": [
+              {
+                "title": "One wait per retry",
+                "text": "A job allowed at most `$maxAttempts` runs needs exactly `$maxAttempts - 1` waits. `backoff_plan(4, 5)` returns `[5, 10, 20]` - three waits before four runs - and `backoff_plan(1, 5)` returns `[]`, because a single-attempt job has no retries.",
+                "state": "backoff_plan(4, 5) = [5, 10, 20]"
+              },
+              {
+                "title": "Base doubling and the clamp",
+                "text": "Delays double from `$baseSeconds` and clamp at `$capSeconds`: `backoff_plan(5, 5, 15)` gives `[5, 10, 15, 15]` - the fourth wait would be 20, but 15 is the cap, and a clamped value stops growing. A custom base works the same: `backoff_plan(3, 2)` returns `[2, 4]`.",
+                "state": "backoff_plan(5, 5, 15) = [5, 10, 15, 15]"
+              },
+              {
+                "title": "The debug twin adds one delay too many",
+                "text": "The broken version loops `$maxAttempts` times instead of `$maxAttempts - 1`, so a job with 4 total attempts gets a fourth retry delay that should not exist: it returns `[5, 10, 20, 40]`.",
+                "state": "bug: 4 waits for 4 attempts"
+              }
+            ]
+          }
+        },
+        {
+          "key": "plan-code",
+          "kind": "code",
+          "payload": {
+            "lang": "php",
+            "title": "Reference solution and verified outputs",
+            "code": "function backoff_plan(int $maxAttempts, int $baseSeconds = 5, int $capSeconds = 3600): array\n{\n    $plan = [];\n    $retries = $maxAttempts - 1; // one wait before each retry, none after the last\n\n    for ($i = 0; $i < $retries; $i++) {\n        $plan[] = min($baseSeconds * (2 ** $i), $capSeconds);\n    }\n\n    return $plan;\n}\n\nbackoff_plan(4, 5);     // [5, 10, 20]\nbackoff_plan(1, 5);     // [] - a single attempt never retries\nbackoff_plan(5, 5, 15); // [5, 10, 15, 15]\nbackoff_plan(3, 2);     // [2, 4]"
+          }
+        },
+        {
+          "key": "messenger",
+          "kind": "heading",
+          "title": "The Messenger mirror: retry_strategy on the transport"
+        },
+        {
+          "key": "messenger-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Symfony Messenger treats retrying as a **delivery** concern, not a business-logic one: the configuration sits on each transport's `retry_strategy`, with defaults `max_retries: 3`, `delay: 1000` (milliseconds), `multiplier: 2` and `max_delay: 0` (no upper bound). A handler failure sends the message back to be consumed again with an increasing delay - roughly 1 s, then 2 s, then 4 s - before the message is finally given up.\n\nThrowing `UnrecoverableMessageHandlingException` tells Messenger a message can never succeed (schema-valid but semantically invalid), so it skips the retry strategy and goes straight to the failure transport - the counterpart of a Laravel guard that fails fast instead of burning `$tries`."
+          }
+        },
+        {
+          "key": "mirror-table",
+          "kind": "table",
+          "payload": {
+            "title": "Laravel knob vs Symfony Messenger knob",
+            "headers": [
+              "Concern",
+              "Laravel",
+              "Symfony Messenger"
+            ],
+            "rows": [
+              [
+                "retry budget",
+                "`$tries` property (counts the first run)",
+                "`max_retries` (default 3)"
+              ],
+              [
+                "wait between retries",
+                "`$backoff` array; the last value repeats when the array runs out",
+                "`delay` 1000 ms and `multiplier` 2 - about 1 s, 2 s, 4 s"
+              ],
+              [
+                "cap on a single delay",
+                "no cap - the last backoff value keeps repeating",
+                "`max_delay` (default 0 = no cap)"
+              ],
+              [
+                "stop trying early",
+                "`retryUntil()` deadline, or `$this->fail()`",
+                "throw `UnrecoverableMessageHandlingException`"
+              ],
+              [
+                "home after giving up",
+                "`failed_jobs` table plus the `failed()` hook",
+                "failure transport (dead-letter)"
+              ]
+            ],
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "why-callout",
+          "kind": "callout",
+          "payload": {
+            "tone": "tip",
+            "title": "Exponential backoff is politeness - with a deadline",
+            "text": "A failing job should back off, but only up to a budget. Between Laravel's `$tries` cap and Messenger's `max_retries`, genuinely broken work ends somewhere inspectable instead of hammering a service forever. What that somewhere looks like - `failed_jobs`, the `failed()` hook, the replay commands and Messenger's failure transport - is the next lesson's subject."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "timeouts-poison-pills",
+      "title": "Timeouts, retry_after and jobs that never finish",
+      "summary": "Jobs are reserved, not deleted - so two clocks govern them: the worker timeout and the connection's retry_after. Learn why a misconfigured pair runs one job twice, and how poison-pill jobs loop forever while failed_jobs stays empty.",
+      "minutes": 11,
+      "difficulty": "hard",
+      "tags": [
+        "queues",
+        "timeouts",
+        "redis",
+        "trap",
+        "poison pill",
+        "poison-pill",
+        "reliability",
+        "failed jobs",
+        "horizon"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Two questions in this module share one root: the timeout-versus-`retry_after` trap and the poison-pill scenario. Both are about what happens when a job does not finish normally - because the worker killed it, the queue gave up waiting, or the process died. This lesson makes the reservation model visible: jobs are not deleted when done, they are **reserved, released and made visible again**."
+          }
+        },
+        {
+          "key": "clocks",
+          "kind": "heading",
+          "title": "Two clocks: worker timeout and retry_after"
+        },
+        {
+          "key": "clocks-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`$timeout` (the `$timeout` property or `queue:work --timeout`) is **worker-side**: how long the worker lets a single job execute before terminating it with a kill signal (via pcntl). `retry_after`, in `config/queue.php` on the connection, is **queue-side**: how long the queue considers a reserved-but-unreleased job stale before making it available again. Timeout kills the job; `retry_after` releases the reservation."
+          }
+        },
+        {
+          "key": "clocks-table",
+          "kind": "table",
+          "payload": {
+            "title": "The two clocks compared",
+            "headers": [
+              "Question",
+              "$timeout / --timeout",
+              "retry_after"
+            ],
+            "rows": [
+              [
+                "Who enforces it",
+                "the worker process",
+                "the queue connection / broker"
+              ],
+              [
+                "What it does",
+                "terminates a job that ran too long",
+                "releases a reservation the queue thinks is stale"
+              ],
+              [
+                "When it fires",
+                "per job execution",
+                "per reserved job, measured from reservation"
+              ],
+              [
+                "Interview one-liner",
+                "bounds a single run",
+                "bounds how long the queue waits for the worker"
+              ]
+            ],
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "scenario-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "The trap: $timeout = 120 s on a connection with retry_after = 90 s",
+            "steps": [
+              {
+                "title": "A legitimate run takes 110 s",
+                "text": "The job's `$timeout` of 120 s means the worker will happily let it run to 110 s. But the redis connection still carries the default `retry_after` of 90 s.",
+                "state": "worker A: still executing at t = 110 s"
+              },
+              {
+                "title": "retry_after fires first",
+                "text": "At 90 s the queue considers the reserved job stale - worker A never released it - and makes it visible again. A second worker reserves it while A is still running.",
+                "state": "t = 90 s: the job becomes visible again"
+              },
+              {
+                "title": "Both workers execute the same job",
+                "text": "The side effects happen twice - duplicate emails, double charges, double inserts - and neither worker knows the other exists.",
+                "state": "duplicate execution"
+              },
+              {
+                "title": "The rule",
+                "text": "`retry_after` must always be larger than the maximum timeout of any job on that connection. A worker that dies mid-job also relies on `retry_after` to eventually release its reservation - the same number does double duty.",
+                "state": "retry_after > max job timeout"
+              }
+            ]
+          }
+        },
+        {
+          "key": "fig-double",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-flow\">\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-a\">Worker A reserves the job<span class=\"tag\">t = 0</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-c\">A still running at 90 s<span class=\"tag\">timeout is 120 s</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-r\">queue makes the job visible again<span class=\"tag\">retry_after = 90 s passed</span></span>\n  </div>\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-a\">Worker B reserves the same job</span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-r\">A and B both run handle()</span>\n    <span class=\"ld-note\">side effects happen twice</span>\n  </div>\n</div>",
+            "title": "retry_after smaller than the job's runtime: one job, two workers",
+            "caption": "Worker B picks the job up while worker A is still executing it - the classic Laravel queue trap and the module's timeout question in one picture."
+          }
+        },
+        {
+          "key": "rule-warning",
+          "kind": "callout",
+          "payload": {
+            "tone": "warning",
+            "title": "retry_after must exceed every timeout on the connection",
+            "text": "The same hazard exists in every stack: SQS has its visibility timeout, Messenger's Redis transport has `redeliver_timeout`, and the Doctrine transport has its own message-redelivery setting. Wherever the queue redelivers work that a worker still holds, a value that is too small buys you duplicates."
+          }
+        },
+        {
+          "key": "poison",
+          "kind": "heading",
+          "title": "When the process dies: the poison-pill loop"
+        },
+        {
+          "key": "poison-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The normal failure path is orderly: `handle()` throws, the worker catches the exception, counts the attempt, applies the backoff and retries; once `$tries` (or `retryUntil()`) is exhausted, the job is written to `failed_jobs` and `failed()` runs.\n\n**That path never runs when the worker process itself dies.** An OOM kill or segfault gives Laravel no chance to record the attempt or execute failure hooks: the job simply stays reserved until `retry_after` elapses, then the queue makes it visible again and a fresh worker picks it up - repeating the cycle forever while `failed_jobs` stays empty."
+          }
+        },
+        {
+          "key": "paths-table",
+          "kind": "table",
+          "payload": {
+            "title": "Four failure modes and where each job ends up",
+            "headers": [
+              "What happens",
+              "Attempt recorded?",
+              "Where the job goes",
+              "failed_jobs row?"
+            ],
+            "rows": [
+              [
+                "`handle()` throws; budget left",
+                "yes",
+                "released with backoff, retried later",
+                "no"
+              ],
+              [
+                "`handle()` throws; budget exhausted",
+                "yes",
+                "`failed()` runs, row written",
+                "yes"
+              ],
+              [
+                "worker OOM-killed or segfaults mid-run",
+                "no",
+                "stays reserved until retry_after, then visible again",
+                "no - the poison pill"
+              ],
+              [
+                "runaway loop with no timeout",
+                "no - never returns",
+                "blocks the worker indefinitely",
+                "no"
+              ]
+            ],
+            "note": "A poison-pill job - one that kills workers or runs far beyond the timeout - is retried forever at the broker level while failed_jobs stays empty, unless you bound execution.",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "runaway-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "A loop without a timeout never even fails",
+            "text": "A runaway loop is the same disease one step earlier: without `--timeout` or `$timeout` the job never returns control, occupying one worker indefinitely - the worker cannot count an attempt it never sees finish. Give every external-facing job a timeout so an endless loop becomes a retryable failure instead of a permanent hang."
+          }
+        },
+        {
+          "key": "strategy",
+          "kind": "heading",
+          "title": "Prevention and quarantine, end to end"
+        },
+        {
+          "key": "strategy-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "The five-part defence from the module scenario",
+            "steps": [
+              {
+                "title": "Bound execution",
+                "text": "Set `$timeout` on every external job so a runaway loop is killed and converted into a retryable failure, and keep `retry_after` above the largest timeout. Cap `$tries` and give a backoff array so genuinely failing jobs escalate to `failed_jobs` after a few attempts instead of hammering the API.",
+                "state": "timeouts + tries + backoff"
+              },
+              {
+                "title": "Validate and quarantine",
+                "text": "Reject malformed payloads before processing - a constructor or first-line guard that throws an unrecoverable-style exception. Treat repeated failures of the same job as a signal to alert rather than to auto-retry; on SQS the analogous quarantine is a dead-letter queue after `maxReceiveCount`.",
+                "state": "fail fast, alert, don't loop"
+              },
+              {
+                "title": "Locks and state guards",
+                "text": "`WithoutOverlapping` keyed by a business id stops two concurrent copies when redelivery happens, and a `started_at` heartbeat row or cache entry with a TTL lets a watchdog spot a job processing far beyond its expected duration.",
+                "state": "no overlap + heartbeat"
+              },
+              {
+                "title": "Memory and process management",
+                "text": "Shrink per-job memory (chunked DB processing, `unset` large payloads), raise the worker memory limit deliberately, and let supervisord or systemd restart workers. Horizon adds its own timeout and memory supervision plus a dashboard of failed counts, throughput and runtimes.",
+                "state": "supervised workers"
+              },
+              {
+                "title": "Re-dispatch only after the fix",
+                "text": "When the root cause is fixed, replay quarantined work with `queue:retry {id}` or from Horizon's failed-jobs screen - never push it straight back into the live queue.",
+                "state": "queue:retry after the fix"
+              }
+            ]
+          }
+        },
+        {
+          "key": "phrase-tip",
+          "kind": "callout",
+          "payload": {
+            "tone": "tip",
+            "title": "One sentence for the interview",
+            "text": "A job that always throws is bounded by its retry budget; a job that never finishes is bounded only by your timeout and your monitoring. The module's poison-pill scenario asks you to design both bounds - plus validation, state guards and replay tooling - end to end."
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Retrying on the consumer (Laravel backoff, Messenger `retry_strategy`) keeps attempts inside the framework's bookkeeping and lets you apply per-job logic such as `retryUntil()`, but it still occupies a worker slot. Transport-level redelivery - `retry_after`, SQS's visibility timeout, Messenger's `redeliver_timeout` - protects against crashes but can create duplicates. That is why the final lesson of this module makes idempotent handlers the safety net underneath everything."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "failed-jobs-supervision",
+      "title": "Failed jobs, replay and Horizon supervision",
+      "summary": "When attempts run out, a job becomes a record you can inspect, hook into and replay - plus a dead-letter mirror in Symfony Messenger. This lesson covers the failed_jobs lifecycle and the Horizon topology, metrics and deploy ritual for running workers in production.",
+      "minutes": 12,
+      "difficulty": "hard",
+      "tags": [
+        "queues",
+        "failed jobs",
+        "failed_jobs",
+        "horizon",
+        "symfony messenger",
+        "failure transport"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "When attempts run out, the job does not disappear - Laravel writes it somewhere inspectable, gives you a hook to react at the moment of failure, and hands operators commands to replay it. The module's failed-jobs question covers that lifecycle, and its Horizon question asks how you run and watch workers in production. This lesson joins the two: dead letters on one side, supervision on the other."
+          }
+        },
+        {
+          "key": "lifecycle",
+          "kind": "heading",
+          "title": "The failed_jobs table: nothing is lost"
+        },
+        {
+          "key": "lifecycle-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Once every allowed attempt has failed, Laravel records a row in the `failed_jobs` table so the work can be inspected and replayed later. The row keeps enough to reconstruct exactly what failed, and **nothing is deleted automatically** - retention is yours, via the `queue:prune-failed` command."
+          }
+        },
+        {
+          "key": "columns-table",
+          "kind": "table",
+          "payload": {
+            "title": "What a failed_jobs row keeps",
+            "headers": [
+              "Column",
+              "What it holds"
+            ],
+            "rows": [
+              [
+                "`uuid`",
+                "the identifier the replay commands use"
+              ],
+              [
+                "`connection`, `queue`",
+                "where the job came from"
+              ],
+              [
+                "`payload`",
+                "the serialized job data"
+              ],
+              [
+                "`exception`",
+                "message and stack trace"
+              ],
+              [
+                "`failed_at`",
+                "when the attempts were exhausted"
+              ]
+            ],
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "hooks",
+          "kind": "heading",
+          "title": "Failure hooks: run code at the moment of failure"
+        },
+        {
+          "key": "hooks-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Each job may define `failed(Throwable $e)`. Laravel calls it **after the final attempt**, so it can do what `handle()` no longer can: roll back a flag, notify Slack, log extra context, or copy the payload to a dead-letter store for manual replay. Jobs without their own method can listen to the `JobFailed` event instead; the legacy `Queue::failing` hook is the older spelling of the same idea."
+          }
+        },
+        {
+          "key": "failed-code",
+          "kind": "code",
+          "payload": {
+            "lang": "php",
+            "title": "The failed() hook on a job",
+            "code": "class CallBillingApi implements ShouldQueue\n{\n    public $tries = 3;\n\n    public function handle(): void\n    {\n        // charge the customer…\n    }\n\n    public function failed(Throwable $e): void\n    {\n        // Runs only after the last attempt. handle() is gone by now —\n        // roll back a flag, page on-call, copy the payload for replay.\n        logger()->error('billing job dead after 3 tries', [\n            'exception' => $e->getMessage(),\n            'order_id'  => $this->orderId,\n        ]);\n    }\n}"
+          }
+        },
+        {
+          "key": "toolbox",
+          "kind": "heading",
+          "title": "The operator toolbox"
+        },
+        {
+          "key": "commands-table",
+          "kind": "table",
+          "payload": {
+            "title": "Artisan commands for failed jobs",
+            "headers": [
+              "Command",
+              "What it does"
+            ],
+            "rows": [
+              [
+                "`queue:failed`",
+                "lists the failed jobs with their ids and exceptions"
+              ],
+              [
+                "`queue:retry {id|all}`",
+                "pushes the job back onto the queue (optionally `--queue`); it runs fresh attempts"
+              ],
+              [
+                "`queue:forget {id}`",
+                "deletes one failed record without retrying"
+              ],
+              [
+                "`queue:flush`",
+                "empties the whole failed_jobs table"
+              ],
+              [
+                "`queue:prune-failed --hours=24`",
+                "deletes records older than the cutoff - the only automatic cleanup, and only when you schedule it"
+              ]
+            ],
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "dead-letter-why",
+          "kind": "callout",
+          "payload": {
+            "tone": "why",
+            "title": "Failed jobs are your dead-letter channel",
+            "text": "Different stacks, the same idea: SQS quarantines poison messages in a dead-letter queue after `maxReceiveCount`; Symfony Messenger routes exhausted messages to a failure transport; Laravel's `failed_jobs` table plays the same role in the database. The mechanism differs - a table here, a real transport there - but the operational loop is identical: inspect, fix, replay."
+          }
+        },
+        {
+          "key": "messenger",
+          "kind": "heading",
+          "title": "The Messenger mirror: failure transport"
+        },
+        {
+          "key": "messenger-text",
+          "kind": "prose",
+          "payload": {
+            "text": "In Symfony Messenger you configure `framework.messenger.failure_transport` to name another transport - commonly a Doctrine transport used as a dead-letter queue. Messages whose retries are exhausted land there instead of being lost: `messenger:failed:show` lists them, `messenger:failed:retry` re-dispatches selected failures, `messenger:failed:remove` deletes them.\n\nThe contrast to state in an interview: Laravel keeps failures in one database table, while Messenger keeps them in a real transport you could point at a completely different system."
+          }
+        },
+        {
+          "key": "messenger-table",
+          "kind": "table",
+          "payload": {
+            "title": "Laravel and Messenger, side by side",
+            "headers": [
+              "Laravel",
+              "Symfony Messenger"
+            ],
+            "rows": [
+              [
+                "`failed_jobs` table",
+                "`failure_transport` (a configured transport as dead-letter)"
+              ],
+              [
+                "`queue:failed`",
+                "`messenger:failed:show`"
+              ],
+              [
+                "`queue:retry {id|all}`",
+                "`messenger:failed:retry`"
+              ],
+              [
+                "`queue:forget` / `queue:flush`",
+                "`messenger:failed:remove`"
+              ]
+            ],
+            "mono": [
+              0,
+              1
+            ]
+          }
+        },
+        {
+          "key": "horizon",
+          "kind": "heading",
+          "title": "Running workers properly: Horizon"
+        },
+        {
+          "key": "horizon-run",
+          "kind": "prose",
+          "payload": {
+            "text": "Horizon runs as a single supervised process per host - `php artisan horizon` under supervisord or systemd with autorestart, on `QUEUE_CONNECTION=redis`. `config/horizon.php` defines an environment block per deployment (production, local), and inside it you declare named queues and how many worker processes each supervisor runs."
+          }
+        },
+        {
+          "key": "horizon-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "Designing the topology",
+            "steps": [
+              {
+                "title": "Separate queues by job family and priority",
+                "text": "Group work into named queues and give supervisors a weighted order - `'queue' => ['notifications', 'emails', 'media', 'imports']` drains higher-priority queues first, so a notification backlog cannot starve email.",
+                "state": "priority order in the supervisor"
+              },
+              {
+                "title": "Isolate the nightly import",
+                "text": "Do not put a job that enqueues tens of thousands of rows on the same queue as latency-sensitive email. Give it its own queue, or run a second supervisor for it, so a huge backlog does not delay everything else.",
+                "state": "big backlog should not slow email"
+              },
+              {
+                "title": "Auto-balance worker processes",
+                "text": "With `balance => 'auto'` and `autoScalingStrategy => 'time'`, Horizon continuously rebalances worker processes between queues based on recent wait times, bounded by `minProcesses`, `maxProcesses` and `balanceMaxShift`. Locally, `balance => false` with one process is fine.",
+                "state": "workers follow the wait times"
+              },
+              {
+                "title": "Tune per queue or per job",
+                "text": "Notifications: short timeout and low tries - retry a couple of times, then fail. Media jobs: large timeout with `retry_after` above it. Use `WithoutOverlapping` for per-user heavy jobs and `RateLimited` against provider APIs.",
+                "state": "tries/backoff/timeout per job"
+              },
+              {
+                "title": "Deploy without killing work",
+                "text": "Horizon is supervised, so a crash restarts it. After each deployment run `php artisan horizon:terminate` (the same idea as `queue:restart`): workers finish their current jobs and respawn with the new code. Never `kill -9` the process.",
+                "state": "finish current jobs, then respawn"
+              }
+            ]
+          }
+        },
+        {
+          "key": "horizon-metrics",
+          "kind": "prose",
+          "payload": {
+            "text": "The dashboard shows the numbers that tell you a queue is in trouble: jobs processed per minute (throughput), average runtime, failed-job counts and wait times per queue. Route notifications with `Horizon::routeMailNotificationsTo()` or `Horizon::routeSlackNotificationsTo()` for failed jobs and excessive-wait thresholds, so an incident pages you before customers notice.\n\nSymfony Messenger ships no dashboard. Teams export queue depth and consumer metrics to Prometheus/Grafana and run N independent `messenger:consume` processes per transport under supervisord (`numprocs`)."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "chains-batches-middleware",
+      "title": "Chains, batches and job middleware",
+      "summary": "Chains order work, batches parallelise it and job middleware serialises it. Learn to keep Bus::chain, Bus::batch and WithoutOverlapping apart, including the schema each needs and the traps the module's multi-select questions plant.",
+      "minutes": 10,
+      "difficulty": "medium",
+      "tags": [
+        "queues",
+        "batching",
+        "chaining",
+        "middleware",
+        "locks",
+        "rate limiting"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Two multi-select questions cover the middle of the lifecycle: when one job must follow another (`Bus::chain`), when many should run at once and report back (`Bus::batch`), and how middleware coordinates jobs that would otherwise collide. They are easy to blur in an interview, so keep the three verbs apart: **chains order, batches parallelise, middleware serialises.**"
+          }
+        },
+        {
+          "key": "chain",
+          "kind": "heading",
+          "title": "Chains: strict order, halt on failure"
+        },
+        {
+          "key": "chain-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`Bus::chain([...])` guarantees sequential execution: job 2 starts only after job 1 finishes successfully, and when any job fails the remaining jobs in the chain are **not run** - a `catch()` callback receives the failure so you can react. It is the tool for ordered multi-step workflows: create the account, then provision, then notify."
+          }
+        },
+        {
+          "key": "chain-code",
+          "kind": "code",
+          "payload": {
+            "lang": "php",
+            "title": "A chain with a failure callback",
+            "code": "use Illuminate\\Support\\Facades\\Bus;\n\nBus::chain([\n    new CreateAccount($user),\n    new ProvisionWorkspace($user),\n    new SendWelcomeEmail($user),\n])->catch(function (Throwable $e) {\n    // the chain stopped here — alert, roll back, log\n})->dispatch();"
+          }
+        },
+        {
+          "key": "chain-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "What dispatch() on a chain is not",
+            "text": "`dispatch()` on a chain returns a `PendingChain`, and jobs are queued one after another as each predecessor completes - they are not all pushed at once and reordered by priority at runtime. Also, chaining needs **no extra schema**; only batching does. Both facts are planted traps in the module's multi-select question."
+          }
+        },
+        {
+          "key": "batch",
+          "kind": "heading",
+          "title": "Batches: parallel fan-out with aggregate callbacks"
+        },
+        {
+          "key": "batch-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`Bus::batch([...])` is the parallel counterpart: jobs may execute concurrently across workers, Laravel tracks the whole batch in the `job_batches` table, and aggregate callbacks fire on completion, failure, or regardless of outcome. Batch ids are string UUIDs - persist one and correlate later with `Bus::findBatch()`."
+          }
+        },
+        {
+          "key": "batch-code",
+          "kind": "code",
+          "payload": {
+            "lang": "php",
+            "title": "Dispatch a batch and follow it",
+            "code": "use Illuminate\\Support\\Facades\\Bus;\n\n$batch = Bus::batch([\n    new ProcessCsvChunk($chunk1),\n    new ProcessCsvChunk($chunk2),\n    new ProcessCsvChunk($chunk3),\n])->then(function () {\n    // every chunk succeeded\n})->catch(function (Throwable $e) {\n    // at least one chunk failed\n})->finally(function () {\n    // always runs, success or failure\n})->dispatch();\n\n$batchId = $batch->id; // persist it, then Bus::findBatch($batchId) later"
+          }
+        },
+        {
+          "key": "batchable-code",
+          "kind": "code",
+          "payload": {
+            "lang": "php",
+            "title": "A job that watches its own batch",
+            "code": "use Illuminate\\Bus\\Batchable;\nuse Illuminate\\Bus\\Queueable;\nuse Illuminate\\Contracts\\Queue\\ShouldQueue;\nuse Illuminate\\Foundation\\Bus\\Dispatchable;\nuse Illuminate\\Queue\\InteractsWithQueue;\nuse Illuminate\\Queue\\SerializesModels;\n\nclass ProcessCsvChunk implements ShouldQueue\n{\n    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;\n\n    public function handle(): void\n    {\n        if ($this->batch() && $this->batch()->cancelled()) {\n            return; // the batch was cancelled — stop working\n        }\n\n        // process the chunk…\n        $this->batch()?->progress(); // count one more processed item\n    }\n}"
+          }
+        },
+        {
+          "key": "compare-table",
+          "kind": "table",
+          "payload": {
+            "title": "Chain vs batch at a glance",
+            "headers": [
+              "",
+              "Chain",
+              "Batch"
+            ],
+            "rows": [
+              [
+                "Execution",
+                "strictly one after another",
+                "many jobs concurrently across workers"
+              ],
+              [
+                "Failure",
+                "halts; the remaining jobs are not run",
+                "`catch()` fires; jobs using `Batchable` can cancel the rest"
+              ],
+              [
+                "Order guarantee",
+                "yes - total order",
+                "none needed"
+              ],
+              [
+                "Extra schema",
+                "none",
+                "`job_batches` table via `queue:batches-table`"
+              ]
+            ],
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "middleware",
+          "kind": "heading",
+          "title": "Middleware: coordination without touching handle()"
+        },
+        {
+          "key": "middleware-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Job middleware wraps `handle()` and adds cross-cutting behaviour - skipping, releasing or deleting the job - without polluting business logic. Middleware is registered by returning instances from a `middleware()` method on the job class, and the two workhorses are `WithoutOverlapping` and `RateLimited`."
+          }
+        },
+        {
+          "key": "middleware-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "The coordination tools",
+            "steps": [
+              {
+                "title": "WithoutOverlapping: never run the same job twice at once",
+                "text": "It acquires an atomic cache lock scoped to the job class plus an optional key - `new WithoutOverlapping($user->id)` - which makes never run the same user's report twice declarative. If the lock is held, the middleware releases the job back to the queue instead of executing it.",
+                "state": "lock held - release, don't run"
+              },
+              {
+                "title": "Tune the lock: releaseAfter() and expireAfter()",
+                "text": "`releaseAfter()` inserts a pause before the retry; `expireAfter()` bounds how long a lock may be held, protecting you from a crashed instance that never released its lock. Without `expireAfter()`, a short overlapping job can spin-retry forever.",
+                "state": "bounded wait + bounded lock"
+              },
+              {
+                "title": "RateLimited: throttle execution frequency",
+                "text": "Paired with a named limiter defined via `RateLimiter::for()`, it throttles how often the job runs against, say, a provider API. A throttled job is released back to the queue with a delay instead of failing.",
+                "state": "released with a delay, not failed"
+              },
+              {
+                "title": "Both need a lock-capable cache",
+                "text": "Atomic locks require a supporting store - Redis, Memcached, DynamoDB and others. On a cache store that cannot do atomic locks, this middleware cannot work as intended.",
+                "state": "redis / memcached / dynamodb"
+              }
+            ]
+          }
+        },
+        {
+          "key": "middleware-warning",
+          "kind": "callout",
+          "payload": {
+            "tone": "warning",
+            "title": "Middleware narrows the window; it does not close it",
+            "text": "`WithoutOverlapping` prevents overlapping execution and duplicate dispatch while a job is running - but once a job has completed, a redelivery (visibility-timeout expiry, a network retry) can still run it again. Only idempotent side effects - unique keys, dedupe tables - give effectively-once semantics. That is exactly where this module's final lesson goes."
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Keep the three verbs apart - chain orders, batch parallelises, middleware serialises - and both multi-select questions fall into place. The quiz block below links them; the practice block stays empty for this family because the module keeps its coding drills on the retry side."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "at-least-once-idempotency",
+      "title": "At-least-once delivery and effectively-once design",
+      "summary": "Standard queues deliver at-least-once: the same message can run twice. Diagnose the SQS visibility-timeout duplicate, then design the practical answer - an idempotent consumer with a dedupe table - and finish with the module's hardest scenario task in one sweep.",
+      "minutes": 12,
+      "difficulty": "hard",
+      "tags": [
+        "queues",
+        "sqs",
+        "visibility timeout",
+        "dlq",
+        "exactly-once",
+        "idempotency",
+        "at-least-once",
+        "reliability",
+        "failed_jobs",
+        "poison-pill"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Two hard questions and the module's hardest task circle one fact: **standard queues deliver at-least-once**, so the same message can run twice, and make it never run twice is not on offer. The SQS duplicate-in-the-logs question diagnoses the mechanism; the order-service question designs around it; the scenario task wraps both into a complete failed-job design. This lesson is the through-line."
+          }
+        },
+        {
+          "key": "semantics",
+          "kind": "heading",
+          "title": "Delivery semantics: the honest menu"
+        },
+        {
+          "key": "semantics-text",
+          "kind": "prose",
+          "payload": {
+            "text": "A standard SQS queue and a Redis list both deliver **at-least-once**: a message can be delivered more than once whenever the consumer dies after performing its side effect but before deleting the message, when the visibility timeout expires while the job is still in flight, or when a transient failure triggers a retry.\n\nThe opposite extreme, **at-most-once** (delete before processing), prevents duplicates but silently loses work when the consumer crashes. True **exactly-once** needs agreement between the queue, the worker and the payment provider - distributed transactions and consensus that queues do not provide. SQS FIFO deduplication only collapses duplicates inside a 5-minute window, and it still does not make the downstream side effect atomic."
+          }
+        },
+        {
+          "key": "semantics-table",
+          "kind": "table",
+          "payload": {
+            "title": "Three delivery models",
+            "headers": [
+              "Model",
+              "What it guarantees",
+              "Its cost"
+            ],
+            "rows": [
+              [
+                "at-most-once",
+                "a message never runs twice",
+                "work can be silently lost when the consumer crashes"
+              ],
+              [
+                "at-least-once",
+                "work is not lost",
+                "duplicates happen by design"
+              ],
+              [
+                "exactly-once",
+                "runs exactly once",
+                "requires cross-system agreement - not provided by queues"
+              ]
+            ],
+            "note": "effectively-once - the practical target - means at-least-once delivery plus an idempotent consumer: executing the same logical message twice has the same observable effect as executing it once.",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "sqs",
+          "kind": "heading",
+          "title": "SQS specifics: visibility timeout and the duplicate in the logs"
+        },
+        {
+          "key": "sqs-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "Why the same job executed twice, minutes apart",
+            "steps": [
+              {
+                "title": "SQS hides in-flight messages",
+                "text": "When a worker receives a message, SQS hides it behind the queue's visibility timeout (`connections.sqs.visibility_timeout` in `config/queue.php`; 30 s by default at the AWS queue level) and deletes it only after the job has been handled.",
+                "state": "message hidden while in flight"
+              },
+              {
+                "title": "The timeout expires while the job still runs",
+                "text": "If the worker has not deleted the message by then - because it is still processing, or it died mid-job - SQS makes the message visible again and a second worker can receive it.",
+                "state": "message visible again - second execution"
+              },
+              {
+                "title": "Laravel cannot save you here",
+                "text": "Laravel deletes the SQS message only after the job is handled, so a hard worker crash always leaves the message to be redelivered. Standard SQS is not exactly-once; FIFO deduplication only collapses duplicates inside a 5-minute window.",
+                "state": "at-least-once, by design"
+              },
+              {
+                "title": "The three-part remedy",
+                "text": "Raise the visibility timeout above the worst-case runtime of the longest job on that queue (the same rule as `retry_after` above timeout); configure a dead-letter queue with a `maxReceiveCount` so a genuinely stuck message is quarantined instead of looping; and treat every consumer as potentially duplicate by making side effects idempotent.",
+                "state": "visibility timeout + DLQ + idempotency"
+              }
+            ]
+          }
+        },
+        {
+          "key": "dlq-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "A DLQ is quarantine, not a fix",
+            "text": "A dead-letter queue after `maxReceiveCount` stops a poison message from looping forever - but a quarantine bin still needs a human or a repair job to look at it, decide why it failed, and replay it after the fix. Same discipline as Laravel's `failed_jobs` plus `queue:retry`, just stored in another queue."
+          }
+        },
+        {
+          "key": "effective",
+          "kind": "heading",
+          "title": "Effectively-once: the idempotent consumer"
+        },
+        {
+          "key": "effective-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The practical design starts from delivery semantics: build an **idempotent consumer first**, then layer retry policy on top. Give each message a stable business key - the `order_id` or a provider idempotency key - and record processed keys in a table with a UNIQUE constraint. In the handler, the marker insert and the side effects live in one transaction: either the whole unit commits, or it rolls back and the redelivery re-executes everything."
+          }
+        },
+        {
+          "key": "fig-dedupe",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-flow\">\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-c\">redelivered job, same order_id</span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-a\">BEGIN; INSERT processed_orders(order_id)</span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-dim\">the UNIQUE constraint decides</span>\n  </div>\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-b\">duplicate key</span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-a\">no-op: commit nothing, success</span>\n  </div>\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-b\">fresh insert</span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-a\">charge + email</span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-a\">commit together</span>\n  </div>\n</div>",
+            "title": "Marker insert + side effects, one transaction",
+            "caption": "Duplicate-key violation means already handled - return success without side effects. A fresh insert runs the charge and email and commits them with the marker. A crash after commit leaves a marker the redelivery sees; a crash before commit rolls everything back."
+          }
+        },
+        {
+          "key": "dedupe-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "The pattern in the handler",
+            "steps": [
+              {
+                "title": "Open a transaction and try the marker insert",
+                "text": "Attempt to insert the dedupe marker (`order_id`, status, timestamps). A duplicate-key violation means this order was already handled.",
+                "state": "duplicate key - already handled"
+              },
+              {
+                "title": "No-op on the duplicate",
+                "text": "Commit nothing and return success: the redelivery is harmless because the marker exists.",
+                "state": "return success, no side effects"
+              },
+              {
+                "title": "Otherwise run the side effects and commit together",
+                "text": "Charge the provider and send the email, then commit - marker and effects are atomic in one transaction.",
+                "state": "charge + email + marker, one commit"
+              },
+              {
+                "title": "Crash semantics fall out of the transaction",
+                "text": "Committed - the redelivery sees the marker and no-ops. Rolled back - the redelivery re-executes the whole unit. The one residual case (the payment succeeded but the local transaction rolled back before commit) is what the reconciliation loop is for: query the provider by `order_id` or idempotency key and complete or compensate.",
+                "state": "effectively-once"
+              }
+            ]
+          }
+        },
+        {
+          "key": "dedupe-code",
+          "kind": "code",
+          "payload": {
+            "lang": "php",
+            "title": "The load-bearing piece, in shape",
+            "code": "use Illuminate\\Support\\Facades\\DB;\n\nDB::transaction(function () use ($order) {\n    try {\n        DB::table('processed_orders')->insert([\n            'order_id'     => $order->id,\n            'processed_at' => now(),\n        ]);\n    } catch (\\Illuminate\\Database\\UniqueConstraintViolationException $e) {\n        return; // marker exists — this delivery is a no-op\n    }\n\n    // Fresh marker: run the real side effects…\n    $gateway->charge($order);                  // idempotency key = order id\n    Mail::send(new OrderConfirmation($order));\n    // …and the transaction commits marker and effects together.\n});"
+          }
+        },
+        {
+          "key": "laravel-fit",
+          "kind": "prose",
+          "payload": {
+            "text": "Where the Laravel features fit: `ShouldBeUnique` plus `$uniqueFor` prevents two identical jobs from being queued at the same time, and `WithoutOverlapping` prevents concurrent execution of the same job. Both **narrow the window** - neither makes a completed side effect idempotent against a later redelivery, which is why the dedupe table is the load-bearing piece. Payment APIs expose idempotency keys precisely so the reconciliation loop can ask, by `order_id`, whether a charge already happened."
+          }
+        },
+        {
+          "key": "scenario",
+          "kind": "heading",
+          "title": "The scenario task: failed-job handling, end to end"
+        },
+        {
+          "key": "scenario-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "Designing the answer the module grades",
+            "steps": [
+              {
+                "title": "Start from delivery semantics",
+                "text": "State that queue delivery is at-least-once and exactly-once is not achievable in a distributed system - so the design builds an idempotent consumer first and layers retry policy on top.",
+                "state": "idempotent consumer first"
+              },
+              {
+                "title": "Give the job an explicit retry strategy",
+                "text": "On the job class: a retry cap such as `public $tries = 5`, or better a `retryUntil()` set to `now()->addMinutes(30)` when retries must stop at a wall-clock deadline, plus a `backoff()` returning an exponential sequence like `[5, 15, 60, 300]` so transient outages do not hammer the endpoint.",
+                "state": "tries / retryUntil + exponential backoff"
+              },
+              {
+                "title": "Classify failures",
+                "text": "A permanently malformed payload will never succeed - catch it and call `$this->fail()` to send the job straight to `failed_jobs` instead of burning retries. Let 5xx responses and timeouts bubble up as retryable.",
+                "state": "permanent - fail fast; transient - retry"
+              },
+              {
+                "title": "Design the last-attempt path",
+                "text": "With tries exhausted the job lands in `failed_jobs`. Implement `failed(Throwable $e)` (or a `Queue::failing` listener) to log the payload, page on-call and copy it to a dead-letter store; operators inspect and requeue entries with `queue:failed` and `queue:retry`.",
+                "state": "failed_jobs + failed() + replay"
+              },
+              {
+                "title": "Bound the poison pills",
+                "text": "A job that always fails is bounded by tries and ends in `failed_jobs`, so it cannot stall a healthy worker. The subtler risk is jobs that never finish: give every job a timeout, monitor queue depth and latency with Horizon, and drain workers with `--stop-when-empty` or `--max-time` during deploys.",
+                "state": "timeout + monitoring + draining"
+              }
+            ]
+          }
+        },
+        {
+          "key": "phrase-callout",
+          "kind": "callout",
+          "payload": {
+            "tone": "why",
+            "title": "The phrase that carries the interview",
+            "text": "At-least-once delivery plus an idempotent consumer equals **effectively-once** - the strongest guarantee a queue-based architecture honestly provides. Every design answer in this module - SQS duplicates, the double-charge question, the failed-job scenario - should land on that phrase."
+          }
+        }
+      ]
+    }
+  ]
+}

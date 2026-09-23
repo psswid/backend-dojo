@@ -36,4 +36,9 @@ class Topic extends Model
     {
         return $this->hasMany(Resource::class)->orderBy('sort_order');
     }
+
+    public function lessons(): HasMany
+    {
+        return $this->hasMany(Lesson::class)->orderBy('sort_order');
+    }
 }

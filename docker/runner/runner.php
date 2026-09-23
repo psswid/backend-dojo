@@ -58,7 +58,10 @@ function expect(string $name, $actual, $expected): void {
 }
 PHP;
 
-$main = "<?php\n\n" . $helper . "\n\n" . $code . "\n\n" . $test . "\n";
+// User code first, then the helper, then the tests. This keeps the line
+// numbers in PHP error messages aligned with the editor (main.php line N+1
+// == editor line N; the leading `<?php` occupies line 1).
+$main = "<?php\n" . $code . "\n\n" . $helper . "\n\n" . $test . "\n";
 
 // Write to a private temp dir inside the (tmpfs) /tmp.
 $dir = sys_get_temp_dir() . '/dojo_' . bin2hex(random_bytes(4));

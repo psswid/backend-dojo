@@ -48,6 +48,28 @@
           "Enforce tenant_id in unique/foreign-key constraints and prove isolation with cross-tenant tests."
         ]
       }
+    },
+    {
+      "type": "snippet",
+      "title": "scoped_where: filter rows by tenant and criteria (strict)",
+      "difficulty": "medium",
+      "tags": ["multi-tenancy", "scoping", "array-filtering", "strict-comparison"],
+      "description": "Implement scoped_where(array $rows, int $tenantId, array $criteria): array. It returns the rows that are BOTH owned by $tenantId (tenant_id strictly equals $tenantId) AND match every key => value in $criteria (strict comparison). A row missing tenant_id, or missing any criteria key, is excluded. An empty $criteria means 'tenant scope only'. Examples: scoped_where([['tenant_id' => 3, 'status' => 'paid'], ['tenant_id' => 3, 'status' => 'open']], 3, ['status' => 'paid']) returns [['tenant_id' => 3, 'status' => 'paid']]; scoped_where([['tenant_id' => 3]], 3, []) returns [['tenant_id' => 3]]; scoped_where([['status' => 'paid']], 3, ['status' => 'paid']) returns [] (missing tenant_id).",
+      "starter_code": "function scoped_where(array $rows, int $tenantId, array $criteria): array\n{\n    // your code here\n}",
+      "test_suite": "expect('tenant and criteria match', scoped_where([['tenant_id' => 3, 'status' => 'paid'], ['tenant_id' => 3, 'status' => 'open']], 3, ['status' => 'paid']), [['tenant_id' => 3, 'status' => 'paid']]);\nexpect('empty criteria is tenant scope only', scoped_where([['tenant_id' => 3], ['tenant_id' => 9]], 3, []), [['tenant_id' => 3]]);\nexpect('missing tenant_id excluded', scoped_where([['status' => 'paid']], 3, ['status' => 'paid']), []);\nexpect('missing criteria key excluded', scoped_where([['tenant_id' => 3, 'status' => 'paid']], 3, ['status' => 'paid', 'x' => 1]), []);\nexpect('strict type matching', scoped_where([['tenant_id' => 3, 'id' => 1]], 3, ['id' => '1']), []);",
+      "solution": "function scoped_where(array $rows, int $tenantId, array $criteria): array\n{\n    $result = [];\n\n    foreach ($rows as $row) {\n        if (($row['tenant_id'] ?? null) !== $tenantId) {\n            continue;\n        }\n\n        $ok = true;\n        foreach ($criteria as $k => $v) {\n            if (!array_key_exists($k, $row) || $row[$k] !== $v) {\n                $ok = false;\n                break;\n            }\n        }\n\n        if ($ok) {\n            $result[] = $row;\n        }\n    }\n\n    return $result;\n}",
+      "rubric": null
+    },
+    {
+      "type": "debug",
+      "title": "assert_scoped filters instead of failing closed on a leak",
+      "difficulty": "medium",
+      "tags": ["multi-tenancy", "data-leak", "fail-closed", "debugging"],
+      "description": "assert_scoped(array $rows, int $tenantId): array must return the rows UNCHANGED when every row belongs to $tenantId, and return [] (fail closed) when ANY row is unscoped or belongs to another tenant — so a data leak is a loud failure, never a silent filter. The broken version silently filters out the offending rows instead of failing, which hides the leak. Fix it to return [] as soon as a single row is not scoped to $tenantId.",
+      "starter_code": "function assert_scoped(array $rows, int $tenantId): array\n{\n    return array_filter($rows, fn($row) => ($row['tenant_id'] ?? null) === $tenantId);\n}",
+      "test_suite": "expect('all scoped passes through', assert_scoped([['tenant_id' => 3, 'x' => 1], ['tenant_id' => 3, 'x' => 2]], 3), [['tenant_id' => 3, 'x' => 1], ['tenant_id' => 3, 'x' => 2]]);\nexpect('foreign tenant fails closed', assert_scoped([['tenant_id' => 3], ['tenant_id' => 9]], 3), []);\nexpect('missing tenant fails closed', assert_scoped([['tenant_id' => 3], ['x' => 1]], 3), []);\nexpect('empty set', assert_scoped([], 3), []);",
+      "solution": "function assert_scoped(array $rows, int $tenantId): array\n{\n    foreach ($rows as $row) {\n        if (($row['tenant_id'] ?? null) !== $tenantId) {\n            return [];\n        }\n    }\n\n    return $rows;\n}",
+      "rubric": null
     }
   ]
 }

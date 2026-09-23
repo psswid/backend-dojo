@@ -53,6 +53,28 @@
           "Track queue depth, replica lag, cache hit ratio, p95 latency, and error rate in dashboards with alerts and runbooks"
         ]
       }
+    },
+    {
+      "type": "snippet",
+      "title": "rate_limit_ok: fixed-window rate-limit check",
+      "difficulty": "medium",
+      "tags": ["rate-limiting", "scalability", "degradation", "fixed-window"],
+      "description": "Implement rate_limit_ok(array $timestamps, int $limit, int $windowSeconds, int $now): bool. It is a fixed-window rate limiter: $timestamps holds the seconds (int) of previous requests. It returns true when a request at $now would still be within the limit — i.e. the number of previous timestamps that fall strictly inside the window (t > $now - $windowSeconds) is fewer than $limit. Examples: rate_limit_ok([], 2, 60, 100) returns true; rate_limit_ok([50, 55], 2, 60, 100) returns false (2 requests in the last 60s); rate_limit_ok([10, 55], 2, 60, 100) returns true (the request at 10 has expired); rate_limit_ok([40], 1, 60, 100) returns true (the request at exactly the window edge has expired).",
+      "starter_code": "function rate_limit_ok(array $timestamps, int $limit, int $windowSeconds, int $now): bool\n{\n    // your code here\n}",
+      "test_suite": "expect('no prior requests', rate_limit_ok([], 2, 60, 100), true);\nexpect('at limit', rate_limit_ok([50, 55], 2, 60, 100), false);\nexpect('expired request ignored', rate_limit_ok([10, 55], 2, 60, 100), true);\nexpect('boundary request expired', rate_limit_ok([40], 1, 60, 100), true);\nexpect('below limit', rate_limit_ok([60, 80], 3, 60, 100), true);",
+      "solution": "function rate_limit_ok(array $timestamps, int $limit, int $windowSeconds, int $now): bool\n{\n    $windowStart = $now - $windowSeconds;\n    $count = 0;\n\n    foreach ($timestamps as $t) {\n        if ($t > $windowStart) {\n            $count++;\n        }\n    }\n\n    return $count < $limit;\n}",
+      "rubric": null
+    },
+    {
+      "type": "debug",
+      "title": "rate_limit_ok counts the window edge as in-window",
+      "difficulty": "medium",
+      "tags": ["rate-limiting", "scalability", "boundary", "debugging"],
+      "description": "rate_limit_ok(array $timestamps, int $limit, int $windowSeconds, int $now): bool must count only timestamps strictly AFTER the window start ($now - $windowSeconds). A timestamp exactly at the window edge has already expired and must NOT be counted. The broken version uses >= instead of >, so the edge request is still counted and a client is wrongly throttled. Fix the boundary comparison.",
+      "starter_code": "function rate_limit_ok(array $timestamps, int $limit, int $windowSeconds, int $now): bool\n{\n    $windowStart = $now - $windowSeconds;\n    $count = 0;\n\n    foreach ($timestamps as $t) {\n        if ($t >= $windowStart) {\n            $count++;\n        }\n    }\n\n    return $count < $limit;\n}",
+      "test_suite": "expect('boundary request expired', rate_limit_ok([40], 1, 60, 100), true);\nexpect('inside window still counts', rate_limit_ok([41], 1, 60, 100), false);\nexpect('at limit', rate_limit_ok([50, 55], 2, 60, 100), false);",
+      "solution": "function rate_limit_ok(array $timestamps, int $limit, int $windowSeconds, int $now): bool\n{\n    $windowStart = $now - $windowSeconds;\n    $count = 0;\n\n    foreach ($timestamps as $t) {\n        if ($t > $windowStart) {\n            $count++;\n        }\n    }\n\n    return $count < $limit;\n}",
+      "rubric": null
     }
   ]
 }

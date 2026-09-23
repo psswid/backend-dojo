@@ -1,0 +1,222 @@
+{
+  "topic": {
+    "slug": "php-plain-code",
+    "name": "Plain PHP & Language Mechanics",
+    "description": "Rebuilding the 'naked' PHP fluency that take-home code challenges test: strings, regex, arrays, validation algorithms, and type-juggling edge cases — no framework, no AI, no crutch.",
+    "color": "#14b8a6",
+    "icon": "🧩",
+    "sort_order": 7
+  },
+  "resources": [
+    {
+      "title": "PHP Manual — Type Comparison Tables",
+      "url": "https://www.php.net/manual/en/types.comparisons.php",
+      "type": "docs",
+      "summary": "The canonical loose (==) vs strict (===) comparison truth tables, including the infamous null/'0'/''/false cases."
+    },
+    {
+      "title": "PHP Manual — String Functions",
+      "url": "https://www.php.net/manual/en/ref.strings.php",
+      "type": "docs",
+      "summary": "strtr, str_replace, str_pad, bin2hex, hex2bin, substr and the rest of the string toolbox."
+    },
+    {
+      "title": "PHP Manual — Array Functions",
+      "url": "https://www.php.net/manual/en/ref.array.php",
+      "type": "docs",
+      "summary": "array_column, array_map/reduce/filter, usort/uasort, array_slice and friends."
+    },
+    {
+      "title": "PHP Manual — preg_match",
+      "url": "https://www.php.net/manual/en/function.preg-match.php",
+      "type": "docs",
+      "summary": "Return values (1/0/false), the $matches behavior, and the difference from preg_match_all."
+    },
+    {
+      "title": "PHP Manual — Generators overview",
+      "url": "https://www.php.net/manual/en/language.generators.overview.php",
+      "type": "docs",
+      "summary": "How yield turns a function into a lazy Generator and why it keeps memory constant."
+    }
+  ],
+  "questions": [
+    {
+      "type": "single",
+      "prompt": "In PHP, what is the value of the expressions 0 == '0' and 0 === '0' respectively?",
+      "options": [
+        "true and true",
+        "true and false",
+        "false and true",
+        "false and false"
+      ],
+      "correct": [1],
+      "explanation": "0 == '0' is true because == (loose equality) coerces the string '0' to the integer 0 before comparing, and 0 equals 0. 0 === '0' is false because === (strict equality) compares both value AND type, and an integer is never identical to a string. The rule to internalize: use === by default, and reach for == only when you deliberately want numeric-string coercion. The trap cases that make this question matter in real code: '0' == false is true (a non-empty string that is falsy), null == 0 is true, and — the one that has caused real bugs — '0' == null is FALSE while '' == null is TRUE. When an id or a flag can be 0, '0', null or '', loose comparison silently conflates four distinct states; strict comparison plus an explicit null check keeps them apart.",
+      "difficulty": "easy",
+      "tags": ["type-juggling", "comparison", "loose-vs-strict"],
+      "resources": [
+        {
+          "title": "PHP Manual — Type Comparison Tables",
+          "url": "https://www.php.net/manual/en/types.comparisons.php",
+          "type": "docs",
+          "summary": "The full loose and strict comparison matrices."
+        }
+      ]
+    },
+    {
+      "type": "multi",
+      "prompt": "Which of the following loose (==) comparisons evaluate to TRUE in PHP 8? Select all that apply.",
+      "options": [
+        "0 == '0'",
+        "0 === '0'",
+        "null == 0",
+        "'0' == null",
+        "'abc' == 0",
+        "'' == null"
+      ],
+      "correct": [0, 2, 5],
+      "explanation": "The true ones: 0 == '0' (string '0' coerces to int 0), null == 0 (null coerces to int), and '' == null (empty string and null are loosely equal). The false ones are the ones that bite. 0 === '0' is false because strict comparison never crosses types. '0' == null is false — this is the famous asymmetry: the string '0' is NOT loosely equal to null even though '0' is falsy, while '' IS equal to null. And 'abc' == 0 is false in PHP 8 (before PHP 8, a non-numeric string loosely compared to 0 was true, which caused countless bugs; PHP 8 changed it so only numeric strings coerce to numbers). If you must compare a possibly-null-or-empty value, write the null check explicitly (value === null || value === '') instead of relying on == — the truth table has too many special cases to hold in your head.",
+      "difficulty": "medium",
+      "tags": ["type-juggling", "comparison", "null", "php8"],
+      "resources": [
+        {
+          "title": "PHP Manual — Type Comparison Tables",
+          "url": "https://www.php.net/manual/en/types.comparisons.php",
+          "type": "docs",
+          "summary": "The loose comparison matrix including the null/'0'/'' cases."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "What does preg_match('/a/', 'banana', $matches) return, and how does it differ from preg_match_all?",
+      "options": [
+        "It returns the number of matches found, just like preg_match_all",
+        "It returns 1 if it finds a match, 0 if it does not, and false on error; preg_match_all returns the total count",
+        "It returns the matched string itself, or null when there is no match",
+        "It returns true on match and throws a warning on no match"
+      ],
+      "correct": [1],
+      "explanation": "preg_match returns 1 when the pattern matches at least once, 0 when it does not match at all, and false when the pattern itself is invalid (a compile error such as an unterminated group). It also stops after the first match and fills $matches with that one. preg_match_all returns the TOTAL number of matches found and fills $matches with all of them. Two practical consequences: (1) never write if (preg_match(...) == true) — because 1 == true is fine but it hides the false-on-error case; check === 1 for 'matched', === 0 for 'no match', and === false for 'bad pattern'. (2) If you need every occurrence, use preg_match_all, not preg_match in a loop. In the dojo's snippet tasks (e.g. parseApiVersion, extract_emails) the distinction determines whether you get one value or a list.",
+      "difficulty": "easy",
+      "tags": ["regex", "preg_match", "return-values"],
+      "resources": [
+        {
+          "title": "PHP Manual — preg_match",
+          "url": "https://www.php.net/manual/en/function.preg-match.php",
+          "type": "docs",
+          "summary": "The 1/0/false return contract and $matches filling."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "You have a list of associative arrays ($rows) and need a new array containing only the values of the 'id' key, in order. Which single function does this?",
+      "options": [
+        "array_column($rows, 'id')",
+        "array_map(fn($r) => $r['id'], $rows)",
+        "array_filter($rows, fn($r) => $r['id'])",
+        "array_values($rows)"
+      ],
+      "correct": [0],
+      "explanation": "array_column($rows, 'id') returns a list of the 'id' values from each row in order — it is the purpose-built tool and also lets you index the result by another column (array_column($rows, 'id', 'email')). array_map with a closure would also work and is a fine answer in a pinch, but it is more code for the same result and the interviewer is checking whether you reach for the dedicated function first. array_filter is wrong: it returns whole rows, and the callback's return value is a truthiness test, not a projection — fn($r) => $r['id'] would keep rows whose id is truthy and drop rows with id 0, which is a silent data-loss bug. array_values reindexes a list but does not project a column at all. When the same job can be done by a named array function, prefer it — it is more readable and usually faster than a hand-rolled closure.",
+      "difficulty": "easy",
+      "tags": ["arrays", "array_column", "projection"],
+      "resources": [
+        {
+          "title": "PHP Manual — array_column",
+          "url": "https://www.php.net/manual/en/function.array-column.php",
+          "type": "docs",
+          "summary": "Column projection with the optional index_key parameter."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "Which sorting function sorts an array by its VALUES while preserving the key-to-value association?",
+      "options": [
+        "usort",
+        "uasort",
+        "uksort",
+        "ksort"
+      ],
+      "correct": [1],
+      "explanation": "uasort sorts by values using a user-defined comparison function and keeps keys attached to their values (u = user, a = associative). usort sorts by values but REINDEXES the result with fresh integer keys, destroying the original keys — use it only for plain lists. uksort sorts by keys using a comparator, and ksort sorts by keys ascending (no comparator). The 'a' in uasort is the associative marker; the mental model is: usort = reindexed value sort, uasort = key-preserving value sort, uksort = comparator key sort, ksort = built-in key sort. One more nuance worth stating in an interview: PHP's sorting functions have been stable since PHP 8.0 (equal elements keep their original order), so a modern answer can rely on stability without hand-rolling an index tiebreaker — though for uasort with a comparator that returns 0 for equal values, stability is exactly what lets you sort by one key and then another without losing the first order.",
+      "difficulty": "medium",
+      "tags": ["arrays", "sorting", "uasort", "usort"],
+      "resources": [
+        {
+          "title": "PHP Manual — uasort",
+          "url": "https://www.php.net/manual/en/function.uasort.php",
+          "type": "docs",
+          "summary": "Key-preserving user-defined value sort."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "You need to transliterate Polish characters to ASCII (ą→a, ż→z, ...) in one pass, without a later replacement re-translating an already-replaced character. Which approach is correct?",
+      "options": [
+        "str_replace(array_keys($map), array_values($map), $s)",
+        "strtr($s, $map) with $map an associative array",
+        "str_replace($map, $s) with $map an associative array",
+        "preg_replace('/[ążź]/', '', $s)"
+      ],
+      "correct": [1],
+      "explanation": "strtr($s, $map) with an associative array does the job correctly: it performs a single-pass, longest-key-first translation, so each character is translated once and already-translated output is never re-scanned. str_replace with separate search and replace arrays is the classic trap: it applies the replacements sequentially, so a later rule can act on the output of an earlier one (for example, if your map turns ż→z and you also have a rule affecting z, the freshly produced z gets hit a second time — a bug that is very hard to spot). str_replace with an associative array is simply the wrong call signature, and preg_replace that deletes characters is not transliteration at all. This is exactly the code path in the dojo's slugify task: transliterate first with strtr, then lowercase, then collapse non-alphanumerics.",
+      "difficulty": "medium",
+      "tags": ["strings", "strtr", "str_replace", "transliteration"],
+      "resources": [
+        {
+          "title": "PHP Manual — strtr",
+          "url": "https://www.php.net/manual/en/function.strtr.php",
+          "type": "docs",
+          "summary": "The array-form translation semantics: longest key first, single pass."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "After a loop `foreach ($arr as &$v) { ... }`, $v remains a reference to the last element of $arr. What is the classic bug this causes, and the fix?",
+      "options": [
+        "Nothing — PHP clears the reference automatically when the loop ends",
+        "A later foreach ($arr as $v) will overwrite the last element; the fix is unset($v) after the loop",
+        "The reference is harmless because foreach always iterates a copy of the array",
+        "PHP emits a notice, so the bug is always visible"
+      ],
+      "correct": [1],
+      "explanation": "foreach by reference leaves $v bound as a reference to the last element of $arr. If you then write a normal foreach over the same array — foreach ($arr as $v) — each iteration assigns into $v, which is STILL a reference, so it overwrites the last element with every value as the loop walks the array; after the loop, the last element holds whatever the second-to-last iteration assigned. This is silent data corruption with no error or notice. The fix is to break the reference immediately after the by-reference loop with unset($v). The habit to adopt: whenever you use foreach ($arr as &$v), write unset($v) on the very next line, and treat any by-reference foreach without that unset as a bug waiting to happen. This is a favorite interview trap because it reproduces only when a by-reference loop is followed by another loop over the same variable.",
+      "difficulty": "hard",
+      "tags": ["foreach", "references", "unset", "trap"],
+      "resources": [
+        {
+          "title": "PHP Manual — foreach",
+          "url": "https://www.php.net/manual/en/control-structures.foreach.php",
+          "type": "docs",
+          "summary": "The reference caveat and the unset($v) recommendation."
+        }
+      ]
+    },
+    {
+      "type": "multi",
+      "prompt": "Which statements about PHP generators (the yield keyword) are TRUE? Select all that apply.",
+      "options": [
+        "A function containing yield returns a Generator object, not the yielded values directly",
+        "Generators evaluate lazily, yielding one value at a time, so memory stays constant for very large sequences",
+        "A generator can never return a final value",
+        "yield pauses the function and resumes it on the next iteration"
+      ],
+      "correct": [0, 1, 3],
+      "explanation": "A generator is a lazy, resumable iterator: a function that contains yield returns a Generator object (option A), and each yield suspends execution, resuming from that point on the next iteration (option D). Because values are produced on demand rather than built into an array up front, iterating a generator over a million rows uses constant memory (option B) — which is why generators are the right tool for reading a huge CSV or a streaming result set without loading it all at once. The false statement is C: a generator CAN return a final value with `return $x;` (not yield), and that value is read after iteration via $gen->getReturn() — useful for returning a summary or aggregate after yielding items. In an interview, connect generators to the real pain they solve: memory-bound loops, and also to iterators that compose (a generator can yield from another with yield from).",
+      "difficulty": "medium",
+      "tags": ["generators", "yield", "memory", "lazy"],
+      "resources": [
+        {
+          "title": "PHP Manual — Generators overview",
+          "url": "https://www.php.net/manual/en/language.generators.overview.php",
+          "type": "docs",
+          "summary": "How yield creates a lazy Generator and the memory model."
+        }
+      ]
+    }
+  ]
+}

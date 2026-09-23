@@ -40,7 +40,7 @@
     },
     {
       "title": "Martin Fowler — CacheAside",
-      "url": "https://martinfowler.com/bliki/CacheAside.html",
+      "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/cache-aside",
       "type": "article",
       "summary": "Fowler on the cache-aside pattern: lazy loading of cache entries and why invalidation is your responsibility."
     },
@@ -68,7 +68,7 @@
       "resources": [
         {
           "title": "Martin Fowler — CacheAside",
-          "url": "https://martinfowler.com/bliki/CacheAside.html",
+          "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/cache-aside",
           "type": "article",
           "summary": "Reference explanation of the cache-aside pattern and its trade-offs."
         },
@@ -253,7 +253,7 @@
         },
         {
           "title": "Redis Rate Limiting Patterns",
-          "url": "https://redis.io/docs/latest/develop/use/patterns/rate-limiting/",
+          "url": "https://redis.io/tutorials/howtos/ratelimiting/",
           "type": "docs",
           "summary": "Fixed window, sliding window, and token bucket implementations on Redis."
         },

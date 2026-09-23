@@ -25,6 +25,13 @@
                             </div>
                             <h3 class="font-semibold text-gray-900 mb-1">{{ $task->title }}</h3>
                             <p class="text-sm text-gray-500 flex-1">{{ Str::limit($task->description, 120) }}</p>
+                            @if (! empty($task->tags))
+                                <div class="mt-3 flex flex-wrap gap-1">
+                                    @foreach (collect($task->tags)->take(4) as $tag)
+                                        <span class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 text-[11px] font-mono">{{ $tag }}</span>
+                                    @endforeach
+                                </div>
+                            @endif
                             <span class="mt-3 text-indigo-600 text-sm font-semibold">Solve →</span>
                         </a>
                     @endforeach

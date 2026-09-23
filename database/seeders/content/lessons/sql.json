@@ -1,0 +1,1433 @@
+{
+  "topic_slug": "sql",
+  "lessons": [
+    {
+      "slug": "join-types-and-full-outer",
+      "title": "JOIN types and MySQL's missing FULL OUTER JOIN",
+      "summary": "INNER keeps only matches, LEFT keeps every left row and pads the right side with NULL, CROSS multiplies everything. Learn the anti-join idiom and why MySQL, unlike PostgreSQL, has no FULL OUTER JOIN - plus the UNION emulation interviewers expect by heart.",
+      "minutes": 9,
+      "difficulty": "medium",
+      "tags": [
+        "joins",
+        "left-join",
+        "anti-join",
+        "full-outer-join",
+        "mysql",
+        "postgres",
+        "sql"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The two JOIN quiz questions in this module bracket the whole topic. The easy one checks that you know what LEFT JOIN keeps; the hard one checks that you know MySQL has **no** FULL OUTER JOIN - a favourite of interviewers who hire across PostgreSQL and MySQL codebases. Both reward the same skill: for any join type, say exactly which rows survive and where the NULLs appear."
+          }
+        },
+        {
+          "key": "families",
+          "kind": "heading",
+          "title": "What each join keeps"
+        },
+        {
+          "key": "matrix",
+          "kind": "table",
+          "payload": {
+            "title": "Row survival by join type",
+            "headers": [
+              "Join",
+              "Which rows survive",
+              "Unmatched side",
+              "Notes"
+            ],
+            "rows": [
+              [
+                "INNER JOIN",
+                "only rows with a match on both sides",
+                "dropped",
+                "ON and WHERE conditions are equivalent in effect"
+              ],
+              [
+                "LEFT JOIN (LEFT OUTER)",
+                "every left row",
+                "right columns padded with NULL",
+                "'all X, optional Y' - the workhorse"
+              ],
+              [
+                "RIGHT JOIN (RIGHT OUTER)",
+                "every right row",
+                "left columns padded with NULL",
+                "legal but rare; clearer as LEFT JOIN with tables swapped"
+              ],
+              [
+                "CROSS JOIN",
+                "every left row x every right row",
+                "no concept of a match",
+                "Cartesian product; no ON clause"
+              ],
+              [
+                "FULL OUTER JOIN",
+                "every row from both sides",
+                "missing side padded with NULL",
+                "NOT supported by MySQL (see below)"
+              ]
+            ],
+            "mono": [
+              0
+            ],
+            "note": "A bare JOIN with no type keyword is an INNER JOIN. MySQL 8.4 supports INNER, LEFT/RIGHT OUTER and CROSS; FULL OUTER JOIN is parsed as an error."
+          }
+        },
+        {
+          "key": "inner-left",
+          "kind": "heading",
+          "title": "INNER vs LEFT on the same rows"
+        },
+        {
+          "key": "inner-left-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "customers c (Ann, Bob) left-joined to orders o (only Ann has an order)",
+            "intro": "Same two tables, two different questions. The row sets below were verified live on MySQL 8.4.",
+            "steps": [
+              {
+                "title": "The data",
+                "text": "`customers`: id 1 = Ann, id 2 = Bob. `orders`: one row with `customer_id = 1` (Ann) and `total = 100`. Bob has no orders.",
+                "state": "Ann -> 1 order, Bob -> 0 orders"
+              },
+              {
+                "title": "INNER JOIN returns the match only",
+                "text": "`c JOIN o ON o.customer_id = c.id` produces exactly the rows where a customer and an order exist together.",
+                "state": "1 | Ann | 100"
+              },
+              {
+                "title": "LEFT JOIN keeps Bob, padded",
+                "text": "`c LEFT JOIN o ...` emits Ann's row and then Bob's row with `o.total` as **NULL** - he is kept because the left side is preserved.",
+                "state": "1 | Ann | 100   and   2 | Bob | NULL"
+              },
+              {
+                "title": "Read the NULL as 'no match'",
+                "text": "A NULL right column after a LEFT JOIN is the join telling you 'no related row existed'. That fact is the entire basis of the anti-join next."
+              }
+            ]
+          }
+        },
+        {
+          "key": "anti-head",
+          "kind": "heading",
+          "title": "The anti-join: rows with NO match"
+        },
+        {
+          "key": "anti-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Flip the NULL: `LEFT JOIN y ON ... WHERE y.id IS NULL` returns exactly the left rows that have **no** match on the right - because a matched row would have a real right-side id. It is the standard SQL idiom for 'X without any Y' and it is what this module's quiz answer calls out. In Eloquent, `leftJoin()` maps to LEFT JOIN, and the ORM's `has()` / `whereDoesntHave()` often compile to EXISTS or a join behind the scenes - but when you read a raw query you should recognise the IS NULL shape instantly."
+          }
+        },
+        {
+          "key": "anti-code",
+          "kind": "code",
+          "payload": {
+            "code": "-- customers who have never placed an order\nSELECT c.id, c.name\nFROM customers c\nLEFT JOIN orders o ON o.customer_id = c.id\nWHERE o.id IS NULL;",
+            "title": "The anti-join idiom",
+            "lang": "sql"
+          }
+        },
+        {
+          "key": "full-head",
+          "kind": "heading",
+          "title": "FULL OUTER JOIN: the syntax MySQL does not have"
+        },
+        {
+          "key": "full-text",
+          "kind": "prose",
+          "payload": {
+            "text": "PostgreSQL supports `FULL OUTER JOIN` directly; MySQL's parser rejects it - a classic portability gotcha, and the subject of the hard quiz question. Two confusions to head off: FULL OUTER JOIN is **not** a CROSS JOIN (it matches on the join condition and pads the missing side with NULL), and omitting the join type does not give you one (a bare JOIN is INNER). The emulation that works everywhere: a **LEFT JOIN UNION a RIGHT JOIN** - the two halves together cover every row from both sides, and UNION removes the rows that appear in both."
+          }
+        },
+        {
+          "key": "full-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "Emulating FULL OUTER JOIN (a has keys 1,2; b has keys 1,3)",
+            "intro": "Row sets below were verified live on MySQL 8.4 - keys 1,2,3 survive, with NULL padding on whichever side lacks the key.",
+            "steps": [
+              {
+                "title": "Half 1: LEFT JOIN",
+                "text": "`a LEFT JOIN b ON a.k = b.k` keeps every a-row: key 1 pairs with b, key 2 has no b.",
+                "state": "(1,a1,b1) and (2,a2,NULL)"
+              },
+              {
+                "title": "Half 2: RIGHT JOIN",
+                "text": "`a RIGHT JOIN b ON a.k = b.k` keeps every b-row: key 1 pairs with a, key 3 has no a.",
+                "state": "(1,a1,b1) and (3,NULL,b3)"
+              },
+              {
+                "title": "Merge with UNION",
+                "text": "`UNION` concatenates the two result sets and removes duplicates. The fully matched row (1,a1,b1) exists in **both** halves, so the merged result must contain it once.",
+                "state": "(1,a1,b1) (2,a2,NULL) (3,NULL,b3)"
+              }
+            ]
+          }
+        },
+        {
+          "key": "full-code",
+          "kind": "code",
+          "payload": {
+            "code": "-- standard emulation: LEFT JOIN UNION RIGHT JOIN (UNION dedupes)\nSELECT a.k, a.x, b.y FROM a LEFT JOIN b ON a.k = b.k\nUNION\nSELECT b.k, a.x, b.y FROM a RIGHT JOIN b ON a.k = b.k;\n\n-- dedupe-safe variant for large sets: UNION ALL + an anti-join\n-- for the right-only rows, so the matched row is never duplicated\nSELECT a.k, a.x, b.y FROM a LEFT JOIN b ON a.k = b.k\nUNION ALL\nSELECT b.k, a.x, b.y FROM a RIGHT JOIN b ON a.k = b.k\nWHERE a.k IS NULL;",
+            "title": "The two emulation shapes",
+            "lang": "sql"
+          }
+        },
+        {
+          "key": "full-fig",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-flow\">\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-a\">LEFT JOIN half<span class=\"tag\">(1,a1,b1) &nbsp;(2,a2,NULL)</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-b\">RIGHT JOIN half<span class=\"tag\">(1,a1,b1) &nbsp;(3,NULL,b3)</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-c\">UNION / UNION ALL + anti-join<span class=\"tag\">emit the matched row once</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-a\">full outer result<span class=\"tag\">(1,a1,b1) (2,a2,NULL) (3,NULL,b3)</span></span>\n  </div>\n  <div class=\"ld-col\"><span class=\"ld-note\">row (1,a1,b1) exists in both halves; plain UNION ALL without the anti-join returns it twice</span></div>\n</div>",
+            "title": "Two halves merge into one full outer result",
+            "caption": "Verified live: naive UNION ALL returns 4 rows (key 1 duplicated); UNION, and UNION ALL with WHERE a.k IS NULL, both return the 3 correct rows."
+          }
+        },
+        {
+          "key": "full-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "UNION dedupes, UNION ALL does not",
+            "text": "The two quiz options that look plausible both fail: MySQL has no FULL OUTER JOIN syntax (option 'same as PostgreSQL'), and it is emphatically not a CROSS JOIN. When you write the emulation, remember the fully matched rows appear in both halves - `UNION` removes them, but a naive `UNION ALL` would duplicate them, which is why the big-set variant adds `WHERE a.k IS NULL` to the right half."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "where-having-group-by-count",
+      "title": "WHERE vs HAVING, GROUP BY rules and COUNT(*) traps",
+      "summary": "One logical pipeline decides everything: FROM, WHERE, GROUP BY, HAVING, SELECT, ORDER BY, LIMIT. See why aggregate filters must live in HAVING, why ONLY_FULL_GROUP_BY demands disciplined GROUP BY columns, how COUNT(*) differs from COUNT(column), and then build the top-customers report the module asks for.",
+      "minutes": 11,
+      "difficulty": "medium",
+      "tags": [
+        "group-by",
+        "having",
+        "where",
+        "aggregates",
+        "count",
+        "null",
+        "join",
+        "write-query",
+        "sql"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Three quiz questions and one scenario task in this module are really one idea: SQL runs a query as a **pipeline of stages**, and every mistake in this cluster - HAVING used as WHERE, a column sneaking past GROUP BY, a count that disagrees with the rows - is someone filtering or selecting at the wrong stage."
+          }
+        },
+        {
+          "key": "pipeline",
+          "kind": "heading",
+          "title": "One pipeline: the logical order of evaluation"
+        },
+        {
+          "key": "pipeline-text",
+          "kind": "prose",
+          "payload": {
+            "text": "SQL evaluates a query in a fixed logical order: `FROM` joins the tables, `WHERE` filters **rows**, `GROUP BY` builds groups, `HAVING` filters **groups**, `SELECT` computes the final columns (aggregates are fully available here), `ORDER BY` sorts, `LIMIT` cuts. Two consequences do the explaining: an aggregate like `SUM(o.total)` does not exist until grouping happens, so it cannot be referenced before `GROUP BY`; and `ORDER BY` runs after `SELECT`, which is why the top-customers answer can sort by the alias `revenue`."
+          }
+        },
+        {
+          "key": "pipeline-fig",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-flow ld-flow-nw\">\n  <div class=\"ld-col\"><span class=\"ld-box ld-dim\">FROM<span class=\"tag\">load + join tables</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box\">WHERE<span class=\"tag\">row filter</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box\">GROUP BY<span class=\"tag\">build groups</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-c\">HAVING<span class=\"tag\">group filter</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box\">SELECT<span class=\"tag\">aggregates ready</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box\">ORDER BY<span class=\"tag\">alias ok here</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-a\">LIMIT<span class=\"tag\">cut rows</span></span></div>\n</div>",
+            "title": "The pipeline: WHERE before grouping, HAVING after",
+            "caption": "The aggregate value only exists at the SELECT/HAVING stages - that is why a condition on SUM(o.total) cannot be written in WHERE."
+          }
+        },
+        {
+          "key": "where-having",
+          "kind": "heading",
+          "title": "WHERE vs HAVING: who can say what"
+        },
+        {
+          "key": "where-having-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`WHERE` filters individual rows **before** grouping: it can use an index and shrinks the data before the costlier grouping runs. `HAVING` filters groups **after** `GROUP BY` and aggregation: it is the only place a condition on an aggregate such as `SUM(amount) > 1000` can live. A plain-column condition (`c.country = 'PL'`) belongs in WHERE - putting it in HAVING works in some databases but runs late and cannot use the same access path. The sentence that scores in an interview: 'WHERE on non-aggregated columns for early filtering and index use; HAVING only on aggregates.' MySQL's ONLY_FULL_GROUP_BY mode (on by default in 8.x) enforces the same discipline: selecting a column that is neither aggregated nor in GROUP BY is rejected outright - verified live on 8.4, the error reads *'Expression #2 of SELECT list is not in GROUP BY ... incompatible with sql_mode=only_full_group_by'*."
+          }
+        },
+        {
+          "key": "wh-table",
+          "kind": "table",
+          "payload": {
+            "title": "The two filters compared",
+            "headers": [
+              "Question",
+              "WHERE",
+              "HAVING"
+            ],
+            "rows": [
+              [
+                "Runs when",
+                "before GROUP BY, on raw rows",
+                "after GROUP BY, on groups"
+              ],
+              [
+                "Can it see aggregates?",
+                "no - they do not exist yet",
+                "yes - that is its job"
+              ],
+              [
+                "Can it use an index?",
+                "yes, on the filtered column",
+                "no - operates on the grouped result"
+              ],
+              [
+                "Typical use",
+                "customer.country = 'PL'",
+                "SUM(o.total) > 1000"
+              ],
+              [
+                "Correct option in the quiz",
+                "filters rows before grouping",
+                "filters on aggregated results after GROUP BY"
+              ]
+            ],
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "count-head",
+          "kind": "heading",
+          "title": "COUNT(*), COUNT(column), COUNT(DISTINCT ...)"
+        },
+        {
+          "key": "count-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`COUNT(*)` counts **every row** in the result set, NULLs included. `COUNT(column)` counts only the **non-NULL values** of that column - so on a nullable column the two diverge, a classic source of 'why is my count wrong' bugs. `COUNT(DISTINCT column)` counts distinct non-NULL values. `COUNT(1)` is the same as `COUNT(*)`. And in InnoDB, `COUNT(*)` is not inherently slower than `COUNT(column)`: both can be answered by a full index scan, and the optimizer may pick the smallest secondary index to do it."
+          }
+        },
+        {
+          "key": "count-table",
+          "kind": "table",
+          "payload": {
+            "title": "Three rows: NULL, 'a', 'a' (verified live on MySQL 8.4)",
+            "headers": [
+              "Expression",
+              "Result",
+              "Counts"
+            ],
+            "rows": [
+              [
+                "COUNT(*)",
+                "3",
+                "every row, NULL or not"
+              ],
+              [
+                "COUNT(v)",
+                "2",
+                "non-NULL values of v only"
+              ],
+              [
+                "COUNT(DISTINCT v)",
+                "1",
+                "distinct non-NULL values"
+              ],
+              [
+                "COUNT(1)",
+                "3",
+                "same as COUNT(*)"
+              ]
+            ],
+            "mono": [
+              1
+            ],
+            "note": "The NULL row drops out of COUNT(v) but not COUNT(*): pick the variant that matches the question you are actually asking."
+          }
+        },
+        {
+          "key": "top-head",
+          "kind": "heading",
+          "title": "Put it to work: top 5 customers by paid revenue"
+        },
+        {
+          "key": "top-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The module's open question and its scenario task share the same schema and ask the same thing: `customers(id, name)`, `orders(id, customer_id, status, total)` - return the top 5 customers by paid revenue, id, name and revenue, highest first. This is the pipeline in miniature; justify every clause."
+          }
+        },
+        {
+          "key": "top-code",
+          "kind": "code",
+          "payload": {
+            "code": "SELECT c.id, c.name, SUM(o.total) AS revenue\nFROM customers c\nJOIN orders o ON o.customer_id = c.id\nWHERE o.status = 'paid'\nGROUP BY c.id, c.name\nHAVING SUM(o.total) > 0\nORDER BY revenue DESC\nLIMIT 5;",
+            "title": "Model answer (INNER JOIN flavour)",
+            "lang": "sql"
+          }
+        },
+        {
+          "key": "top-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "Why each clause is where it is",
+            "steps": [
+              {
+                "title": "JOIN pairs customers with their orders",
+                "text": "`JOIN ... ON o.customer_id = c.id` relates the two tables. An INNER JOIN drops customers with no paid orders - correct for 'top customers **by** revenue'."
+              },
+              {
+                "title": "WHERE removes unpaid rows before grouping",
+                "text": "`WHERE o.status = 'paid'` filters individual rows first, so unpaid orders never enter the SUM. On a real schema this also lets the optimizer use an index."
+              },
+              {
+                "title": "GROUP BY collapses to one row per customer",
+                "text": "Under ONLY_FULL_GROUP_BY every non-aggregated selected column must be listed, hence `c.id, c.name` - selecting just `c.name` while grouping by `c.id` would be rejected."
+              },
+              {
+                "title": "HAVING filters the aggregate",
+                "text": "`HAVING SUM(o.total) > 0` drops zero-revenue groups - optional here, but it is the only clause that can test an aggregate. A WHERE version of this condition cannot exist."
+              },
+              {
+                "title": "ORDER BY alias, LIMIT 5",
+                "text": "`ORDER BY revenue DESC` sorts by the SELECT alias (legal: ORDER BY runs after SELECT); `LIMIT 5` caps the result."
+              }
+            ]
+          }
+        },
+        {
+          "key": "left-twist",
+          "kind": "heading",
+          "title": "The LEFT JOIN twist: WHERE vs ON changes everything"
+        },
+        {
+          "key": "left-twist-text",
+          "kind": "prose",
+          "payload": {
+            "text": "If the requirement changes to 'include customers with zero revenue', you must switch to LEFT JOIN and move the status filter into the **ON clause**: `LEFT JOIN orders o ON o.customer_id = c.id AND o.status = 'paid'`. A customer with no paid orders then produces joined rows where `SUM` sees nothing - the aggregate over zero rows is **NULL**, so `COALESCE(SUM(o.total), 0)` reports 0. The subtle trap: leave `status = 'paid'` in WHERE and that filter runs after the join, discarding exactly the rows that should have kept the customer alive - the LEFT JOIN's promise is broken and zero-revenue customers vanish."
+          }
+        },
+        {
+          "key": "left-code",
+          "kind": "code",
+          "payload": {
+            "code": "SELECT c.id, c.name, COALESCE(SUM(o.total), 0) AS revenue\nFROM customers c\nLEFT JOIN orders o\n       ON o.customer_id = c.id AND o.status = 'paid'\nGROUP BY c.id, c.name\nORDER BY revenue DESC\nLIMIT 5;",
+            "title": "Variant keeping zero-revenue customers (verified: a customer with no paid orders shows revenue 0)",
+            "lang": "sql"
+          }
+        },
+        {
+          "key": "tip",
+          "kind": "callout",
+          "payload": {
+            "tone": "tip",
+            "title": "The interview-ready summary",
+            "text": "LEFT JOIN + filter-in-ON keeps all left rows; WHERE filters rows that should reduce both sides; HAVING only ever holds aggregate conditions; GROUP BY lists every non-aggregated selected column. The scenario task grades exactly these four sentences plus the COALESCE-to-0 move."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "n-plus-one-and-eager-loading",
+      "title": "N+1 queries: counting them, fixing them, catching them",
+      "summary": "One query to load a list, then one query per row because lazy loading fires inside the loop. Learn to count the damage exactly, cure it with with() and withCount(), map it to Doctrine fetch joins, and add a query-count guard so it never ships again.",
+      "minutes": 9,
+      "difficulty": "medium",
+      "tags": [
+        "n+1",
+        "eloquent",
+        "eager-loading",
+        "doctrine",
+        "sql"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The module has a multiple-choice question, an open question and a full scenario task on the same defect - which tells you how often it shows up in real Laravel/Symfony shops. The core skill is counting: N+1 is a **data-access-pattern** bug (per-row round trips), not a missing-index or schema bug, and you should be able to state the exact query count for any loop you are shown."
+          }
+        },
+        {
+          "key": "anatomy",
+          "kind": "heading",
+          "title": "Anatomy: where the N queries come from"
+        },
+        {
+          "key": "anatomy-code",
+          "kind": "code",
+          "payload": {
+            "code": "$posts = Post::all();\n\nforeach ($posts as $post) {\n    echo $post->author->name;   // lazy load fires here, once per row\n}",
+            "title": "The offending shape from the open question",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "count-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "Counting the damage",
+            "steps": [
+              {
+                "title": "One list query",
+                "text": "`Post::all()` - or `Order::latest()->get()` in the scenario task - is the single query that loads the rows.",
+                "state": "1 query"
+              },
+              {
+                "title": "One lazy load per row, per relation",
+                "text": "Accessing `$post->author` on each of N rows is N extra queries. If a row also touches `$order->items->count()`, that collection lazy-loads too: another N.",
+                "state": "1 + N per accessed relation"
+              },
+              {
+                "title": "The scenario task's numbers",
+                "text": "500 orders, loop touches `$order->customer->name` **and** `$order->items->count()`: `1 + 500 + 500`.",
+                "state": "1001 queries for 500 orders"
+              },
+              {
+                "title": "What it should be",
+                "text": "With the right fix the count is constant in N - the list query plus one batched query per relation.",
+                "state": "3 queries, regardless of N"
+              }
+            ]
+          }
+        },
+        {
+          "key": "fix",
+          "kind": "heading",
+          "title": "The fix: eager loading batches the relation"
+        },
+        {
+          "key": "fix-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`Order::with('customer')->get()` runs the list query **plus one** query for all related rows - `WHERE customer_id IN (...)` - and attaches them in memory, so the loop performs zero further queries. The same idea composes: `with(['customer', 'items.product'])` for nested relations, `withCount('comments')` when you only need numbers, and constrained eager loading to limit what is loaded."
+          }
+        },
+        {
+          "key": "fix-code",
+          "kind": "code",
+          "payload": {
+            "code": "$orders = Order::with('customer')\n              ->withCount('items')\n              ->latest()\n              ->get();\n\nforeach ($orders as $order) {\n    echo $order->customer->name;   // already in memory\n    echo $order->items_count;      // aggregate column, no collection load\n}",
+            "title": "The idiomatic fix for the order-list task",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "fix-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "Query log of the fixed version (500 orders)",
+            "steps": [
+              {
+                "title": "Orders",
+                "text": "`Order::with('customer')->withCount('items')->latest()->get()`",
+                "state": "1 query (orders)"
+              },
+              {
+                "title": "Customers",
+                "text": "`with('customer')` resolves to `WHERE customer_id IN (...)` for all referenced customers.",
+                "state": "1 query (customers)"
+              },
+              {
+                "title": "Item counts",
+                "text": "`withCount('items')` is a `GROUP BY order_id` aggregate that produces the `items_count` column.",
+                "state": "1 query (aggregate)"
+              },
+              {
+                "title": "Total",
+                "text": "Three queries total, independent of the row count.",
+                "state": "3 queries, not 1001"
+              }
+            ]
+          }
+        },
+        {
+          "key": "doctrine",
+          "kind": "heading",
+          "title": "The same bug in Doctrine/Symfony"
+        },
+        {
+          "key": "doctrine-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Doctrine lazy-loads the same way, and the equivalents are a DQL **fetch join** (`SELECT o, c FROM Order o JOIN o.customer c`) to hydrate related entities in the same query, or marking the association EAGER. Two caveats the module insists on: fetch-joining a **to-many** relation multiplies the result rows (each child row repeats the parent), and `count()` on a lazy collection loads the whole collection unless the association is configured extra-lazy."
+          }
+        },
+        {
+          "key": "doctrine-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "To-many joins inflate rows",
+            "text": "A one-to-many fetch join returns one row per child, so the parent is duplicated across rows - the result set grows with the children, which can blow up hydrating and pagination. That is why Doctrine developers often prefer two queries (parents + children batched) over one inflated join for to-many relations."
+          }
+        },
+        {
+          "key": "detect",
+          "kind": "heading",
+          "title": "Catch it before it ships"
+        },
+        {
+          "key": "detect-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Watch the query log in Telescope or Debugbar and look for the **same query repeated inside a loop**. The robust version is an automated guard: register a `DB::listen` listener, run the code path over N rows, and assert the query count is constant - if it grows with N, an N+1 has crept back in. Fixing N+1 is easy; the interview skill is catching it before production."
+          }
+        },
+        {
+          "key": "detect-code",
+          "kind": "code",
+          "payload": {
+            "code": "$queries = 0;\nDB::listen(function () use (&$queries) {\n    $queries++;\n});\n\n$orders = Order::with('customer')->withCount('items')->latest()->get();\nforeach ($orders as $order) {\n    $order->customer->name;\n    $order->items_count;\n}\n\n// assertSame(3, $queries);  // constant - fails if lazy loads sneak back in",
+            "title": "A query-count guard (the number must not scale with N)",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Interview echo: 'how many queries does this loop run?' is a counting exercise - name the list query, then one per row per relation. State the principle aloud: eager loading converts N per-row round trips into one batched `IN (...)` query plus aggregates, and verification is a query-count assertion, not a hunch."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "indexes-sargability-explain",
+      "title": "Composite indexes, sargability and reading EXPLAIN",
+      "summary": "A composite index is one sorted list, which is why the leftmost-prefix rule decides what it can serve. Learn which predicates are sargable, which patterns kill an index, and how to read EXPLAIN's type, key, rows and Extra - then apply it all to a slow 20-million-row dashboard query.",
+      "minutes": 12,
+      "difficulty": "hard",
+      "tags": [
+        "indexes",
+        "composite-index",
+        "leftmost-prefix",
+        "sargable",
+        "like",
+        "explain",
+        "query-plan",
+        "optimization",
+        "sql"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Three quiz questions and one hard scenario task form a single story: what an index physically is, which WHERE clauses can use it, and how you read the plan to prove it. The module's dashboard task - a 20-million-row orders table - is the same story under interview pressure, so each piece here maps to a sentence you can say out loud."
+          }
+        },
+        {
+          "key": "sorted",
+          "kind": "heading",
+          "title": "A composite index is one sorted list"
+        },
+        {
+          "key": "sorted-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "Building the sorted view of index (a, b)",
+            "steps": [
+              {
+                "title": "Entries sort by a first",
+                "text": "All rows with `a = 1` come before all rows with `a = 2`, regardless of b.",
+                "state": "a=1 group, then a=2 group"
+              },
+              {
+                "title": "b is sorted inside each a",
+                "text": "Within `a = 1`, the rows are ordered by b: (1,'m') before (1,'x').",
+                "state": "(1,m) (1,x) (2,a) (2,n) ..."
+              },
+              {
+                "title": "Why WHERE b = ? alone fails",
+                "text": "The b-values you want are scattered across every a-group - the index cannot start at 'find b' without knowing a.",
+                "state": "b alone: not addressable"
+              },
+              {
+                "title": "Prefixes are addressable",
+                "text": "`(a)`, `(a, b)` - any leading prefix - can drive a seek; a suffix like `(b)` cannot.",
+                "state": "leftmost prefixes only"
+              }
+            ]
+          }
+        },
+        {
+          "key": "prefix",
+          "kind": "heading",
+          "title": "Leftmost prefix: the quiz matrix"
+        },
+        {
+          "key": "prefix-table",
+          "kind": "table",
+          "payload": {
+            "title": "Composite index (a, b): which queries use it?",
+            "headers": [
+              "Query",
+              "Uses the index?",
+              "Why"
+            ],
+            "rows": [
+              [
+                "WHERE a = ?",
+                "yes",
+                "seek on the leading column - the a part"
+              ],
+              [
+                "WHERE b = ?",
+                "**no**",
+                "b is not leftmost; you cannot skip a"
+              ],
+              [
+                "WHERE a = ? AND b = ?",
+                "yes",
+                "both parts, fully covered"
+              ],
+              [
+                "WHERE a = ? ORDER BY b",
+                "yes",
+                "filters on a; b is already sorted within the a value - no filesort"
+              ],
+              [
+                "WHERE a = ? OR b = ?",
+                "**no**",
+                "two separate access paths across columns"
+              ]
+            ],
+            "mono": [
+              0
+            ],
+            "note": "The bold rows are the traps the multi-select quiz expects you to flag."
+          }
+        },
+        {
+          "key": "prefix-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "Column order is a decision, not a habit",
+            "text": "Order a composite index by what you filter on equality first, then range/order columns - and never put a column you only ORDER BY ahead of an equality column. The dashboard fix `(customer_id, created_at)` works because `customer_id` is the equality predicate and `created_at` is the sort key that follows inside it."
+          }
+        },
+        {
+          "key": "sarg",
+          "kind": "heading",
+          "title": "Sargability: leave the column alone"
+        },
+        {
+          "key": "sarg-text",
+          "kind": "prose",
+          "payload": {
+            "text": "A predicate is **sargable** when the indexed column appears unmodified on one side of the operator, so the engine can seek straight to the stored values. Three patterns defeat an index: a **leading wildcard** (`LIKE '%foo'`) because the match could start anywhere; a **function around the column** (`YEAR(created_at) = 2024`) because the index stores raw values, not their `YEAR()` result; and an **OR across different columns**, which forces two separate access paths (unless each side has its own usable index and the optimizer does an index-merge)."
+          }
+        },
+        {
+          "key": "sarg-table",
+          "kind": "table",
+          "payload": {
+            "title": "Index-friendly vs index-killing conditions (quiz options)",
+            "headers": [
+              "Condition",
+              "Index usable?",
+              "Reason"
+            ],
+            "rows": [
+              [
+                "LIKE 'foo%'",
+                "yes",
+                "prefix match - seeks the B-tree"
+              ],
+              [
+                "LIKE '%foo'",
+                "**no**",
+                "leading wildcard - match could start anywhere"
+              ],
+              [
+                "YEAR(created_at) = 2024",
+                "**no**",
+                "function wraps the column; index holds raw values"
+              ],
+              [
+                "created_at >= '2024-01-01'",
+                "yes",
+                "plain range scan on the column"
+              ],
+              [
+                "a = 1 OR b = 2",
+                "**no**",
+                "two access paths, unless an index-merge applies"
+              ]
+            ],
+            "mono": [
+              0
+            ],
+            "note": "The rule: column on one side of the operator, unmodified; no leading wildcards; no ORs across columns."
+          }
+        },
+        {
+          "key": "sarg-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "Rewriting the YEAR() filter into a range",
+            "steps": [
+              {
+                "title": "The function version",
+                "text": "`WHERE YEAR(created_at) = 2024` cannot use the index on `created_at` - every row's year is computed before any comparison.",
+                "state": "index on created_at: unused"
+              },
+              {
+                "title": "The sargable rewrite",
+                "text": "A range over the raw column expresses the same window: from midnight on 2024-01-01 up to (not including) 2025-01-01.",
+                "state": "created_at >= '2024-01-01' AND created_at < '2025-01-01'"
+              },
+              {
+                "title": "Result",
+                "text": "Now the engine can seek to the start of 2024 and walk the index.",
+                "state": "index range scan"
+              }
+            ]
+          }
+        },
+        {
+          "key": "explain",
+          "kind": "heading",
+          "title": "Reading EXPLAIN"
+        },
+        {
+          "key": "explain-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`EXPLAIN SELECT ...` shows one row per table access. Start at the **type** column - the access strategy from best to worst - then read `possible_keys` (candidate indexes), `key` (the one actually chosen), `rows` (estimated rows examined) and `Extra` (flags like `Using filesort`, `Using temporary`, or `Using index` for a covering index). The interview shorthand: 'start at type; if it says ALL on a large table, look for a missing index; then check rows and Extra for filesorts.'"
+          }
+        },
+        {
+          "key": "type-table",
+          "kind": "table",
+          "payload": {
+            "title": "The type column, best to worst",
+            "headers": [
+              "type",
+              "Meaning",
+              "Typical of"
+            ],
+            "rows": [
+              [
+                "const / system",
+                "one row via a unique key",
+                "primary-key lookup"
+              ],
+              [
+                "eq_ref",
+                "one row per lookup",
+                "join on the PK / unique key"
+              ],
+              [
+                "ref",
+                "non-unique index lookup",
+                "WHERE customer_id = ? on an index"
+              ],
+              [
+                "range",
+                "index range scan",
+                "comparisons, BETWEEN, prefix LIKE"
+              ],
+              [
+                "index",
+                "full index scan",
+                "better than a table scan"
+              ],
+              [
+                "ALL",
+                "full table scan",
+                "the thing you usually want to eliminate"
+              ]
+            ],
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "dash",
+          "kind": "heading",
+          "title": "Put it to work: a 20-million-row dashboard"
+        },
+        {
+          "key": "dash-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The scenario task: `SELECT * FROM orders WHERE customer_id = 5 ORDER BY created_at DESC LIMIT 20` on 20 million orders is slow. The fix is a composite index on `(customer_id, created_at)` - equality column first, sort column second - so the engine seeks to `customer_id = 5` and walks the already-sorted `created_at` values, reading only the top 20 rows."
+          }
+        },
+        {
+          "key": "dash-code",
+          "kind": "code",
+          "payload": {
+            "code": "CREATE INDEX idx_orders_customer_created\n  ON orders (customer_id, created_at DESC);",
+            "title": "The candidate index",
+            "lang": "sql"
+          }
+        },
+        {
+          "key": "dash-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "Verifying with EXPLAIN - and what to expect to change",
+            "intro": "EXPLAIN reports the optimizer's plan; before/after expectations below follow from the plan columns, not from fabricated output.",
+            "steps": [
+              {
+                "title": "Before the index",
+                "text": "With no usable index the plan typically shows `type = ALL` (full table scan) or a wide range, a large `rows` estimate, and `Extra: Using filesort` for the ORDER BY.",
+                "state": "type ALL, filesort"
+              },
+              {
+                "title": "After the index",
+                "text": "Expected plan: `type = ref`, `key = idx_orders_customer_created`, `rows` drops to about the number of that customer's orders, and `Using filesort` disappears - ORDER BY is served by the index order.",
+                "state": "type ref, no filesort"
+              },
+              {
+                "title": "EXPLAIN ANALYZE for truth",
+                "text": "`EXPLAIN ANALYZE` (MySQL 8.0.18+) executes the query and reports **actual** timings and row counts instead of estimates - use it when estimates are misleading."
+              },
+              {
+                "title": "If the index still does not help",
+                "text": "Walk the fallback ladder: is the predicate sargable? Is the column selective (a low-cardinality column like `status` is often ignored)? Are stats stale (`ANALYZE TABLE`)? Would a covering index fit the narrow SELECT list? Does the ORDER BY direction match the index so MySQL 8 can walk it backwards without a sort?",
+                "state": "sargability -> selectivity -> stats -> covering -> direction"
+              }
+            ]
+          }
+        },
+        {
+          "key": "tip",
+          "kind": "callout",
+          "payload": {
+            "tone": "tip",
+            "title": "One sentence for the interview",
+            "text": "'Add the index only after the predicate is sargable and the column is selective, then prove it with EXPLAIN: type ref, key set, rows low, no Using filesort.' That single sentence covers the quiz's EXPLAIN question and the scenario task's verification step at once."
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "The three pieces connect: leftmost prefix tells you what a composite index can serve, sargability tells you whether your WHERE even qualifies, and EXPLAIN tells you what the optimizer actually did. Practise on one real slow query end to end and the whole cluster becomes one fluent answer instead of three memorised facts."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "window-functions-rank-top-n",
+      "title": "Window functions: ROW_NUMBER vs RANK vs DENSE_RANK",
+      "summary": "All three number rows inside OVER (PARTITION BY ... ORDER BY ...), but ties split them apart: ROW_NUMBER is unique, RANK leaves gaps, DENSE_RANK does not. Learn to read the numbers, then build the top-N-rows-per-group pattern the module's hard task demands.",
+      "minutes": 10,
+      "difficulty": "medium",
+      "tags": [
+        "sql",
+        "window-functions",
+        "row_number",
+        "rank",
+        "top-n"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Window functions are the tool for 'give me N rows **per group**' - the one thing a plain GROUP BY physically cannot do, because it collapses each group to a single row. The module's quiz checks you can tell the three counters apart on ties; the scenario task makes you build the top-3-per-customer report with them."
+          }
+        },
+        {
+          "key": "over",
+          "kind": "heading",
+          "title": "What OVER does"
+        },
+        {
+          "key": "over-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY total DESC)` computes, for each row, a number **within its partition**: PARTITION BY resets the counter for every customer, ORDER BY decides what 'position 1' means. Unlike GROUP BY, a window function does **not** collapse rows - every input row stays in the output with its window number attached. Windows run after WHERE and GROUP BY but before the final ORDER BY, and MySQL has supported them since 8.0."
+          }
+        },
+        {
+          "key": "over-table",
+          "kind": "table",
+          "payload": {
+            "title": "Three counters on ties - scores 10, 10, 20, 30 (verified live)",
+            "headers": [
+              "Score",
+              "ROW_NUMBER()",
+              "RANK()",
+              "DENSE_RANK()"
+            ],
+            "rows": [
+              [
+                "10",
+                "1",
+                "1",
+                "1"
+              ],
+              [
+                "10",
+                "2",
+                "1",
+                "1"
+              ],
+              [
+                "20",
+                "3",
+                "3",
+                "2"
+              ],
+              [
+                "30",
+                "4",
+                "4",
+                "3"
+              ]
+            ],
+            "mono": [
+              0
+            ],
+            "note": "The two tied 10s share rank 1; RANK then skips to 3 (gaps), DENSE_RANK continues at 2 (no gaps). ROW_NUMBER never ties - it just picks an order."
+          }
+        },
+        {
+          "key": "read",
+          "kind": "heading",
+          "title": "Reading the numbers"
+        },
+        {
+          "key": "read-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "`ROW_NUMBER()` is a plain always-unique counter - on a tie it still hands out distinct values `1, 2` in some order. `RANK()` gives tied rows the same rank and **leaves gaps**: `1, 2, 2, 4`. `DENSE_RANK()` shares the rank but **never gaps**: `1, 2, 2, 3`. Match the tool to intent: exactly N rows per group is ROW_NUMBER; 'a score of 40 is 2nd place' is RANK; 'how many distinct positions exist up to here' is DENSE_RANK."
+          }
+        },
+        {
+          "key": "ties",
+          "kind": "steps",
+          "payload": {
+            "title": "The boundary case: what a rn <= 3 filter returns",
+            "intro": "On scores 50, 40, 40, 40, 30 the three counters disagree about how many rows 'top 3' should include (verified live).",
+            "steps": [
+              {
+                "title": "ROW_NUMBER: exactly N rows",
+                "text": "Numbers 1..5 in score order; `rn <= 3` keeps precisely the top three rows (50, 40, 40).",
+                "state": "3 rows"
+              },
+              {
+                "title": "RANK: ties can exceed N",
+                "text": "Ranks are 1, 2, 2, 2, 5 - the three tied 40s share rank 2 - so `rk <= 3` keeps **four** rows (50 and all three 40s).",
+                "state": "4 rows under rk <= 3"
+              },
+              {
+                "title": "DENSE_RANK: no gaps, still shares",
+                "text": "Dense ranks 1, 2, 2, 2, 3 keep every row through the third distinct score (50, 40, 40, 40, 30).",
+                "state": "5 rows under dr <= 3"
+              }
+            ]
+          }
+        },
+        {
+          "key": "topn",
+          "kind": "heading",
+          "title": "The top-N-per-group pattern"
+        },
+        {
+          "key": "topn-text",
+          "kind": "prose",
+          "payload": {
+            "text": "'Top 3 most valuable orders per customer' cannot come from GROUP BY - a group has one row, and the task wants the individual top-3 rows. The pattern is a subquery that numbers rows inside each partition, then an outer filter on the number. In MySQL the derived table must have an alias (`ranked`)."
+          }
+        },
+        {
+          "key": "topn-code",
+          "kind": "code",
+          "payload": {
+            "code": "SELECT *\nFROM (\n  SELECT o.*,\n         ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY total DESC) AS rn\n  FROM orders o\n) ranked\nWHERE rn <= 3;",
+            "title": "The reference solution shape",
+            "lang": "sql"
+          }
+        },
+        {
+          "key": "topn-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "What the query does, stage by stage",
+            "steps": [
+              {
+                "title": "Number inside the partition",
+                "text": "For each order, `ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY total DESC)` assigns 1 to the customer's biggest order, 2 to the next, and so on.",
+                "state": "customer 1: totals 30,20,10,5 -> rn 1,2,3,4"
+              },
+              {
+                "title": "Outer WHERE cuts to N",
+                "text": "The outer query keeps only rows with `rn <= 3`. Verified on the module's shape: customer 1 returns totals 30, 20, 10; customer 2 returns 99, 1.",
+                "state": "top 3 per customer"
+              },
+              {
+                "title": "Swap the counter for tie semantics",
+                "text": "ROW_NUMBER gives exactly 3 per customer; RANK can return more when ties straddle the boundary; DENSE_RANK shares places without gaps. Pick per requirement.",
+                "state": "'exactly N' vs 'tied for top N'"
+              }
+            ]
+          }
+        },
+        {
+          "key": "why",
+          "kind": "callout",
+          "payload": {
+            "tone": "why",
+            "title": "Why GROUP BY cannot answer this",
+            "text": "GROUP BY collapses each customer to one output row, so it can compute `MAX(total)` but cannot hand back the individual rows that hold the top three totals. 'N rows per group' is precisely the problem window functions were built for - keep every row, attach a per-group position, then filter on the position."
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Interview variant to be ready for: the same subquery with `RANK()` or `DENSE_RANK()` and the question 'what changes if two orders tie at 100?' - answer with the gap/no-gap numbers and the boundary effect above. In Laravel, embed the pattern with `DB::select` or a query-builder subquery; the window itself always runs after WHERE/GROUP BY and before the final ORDER BY."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "offset-vs-keyset-pagination",
+      "title": "Keyset pagination: killing the OFFSET tax",
+      "summary": "OFFSET pagination is O(page): the database scans and discards every preceding row before returning the page, so deep pages crawl. Keyset pagination replaces the offset with a bookmark on the sort key, seeks straight to it, and stays fast at any depth - at the price of no page-number jumps.",
+      "minutes": 10,
+      "difficulty": "hard",
+      "tags": [
+        "pagination",
+        "offset",
+        "keyset",
+        "cursor",
+        "sql"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The quiz question asks why `LIMIT 20 OFFSET 100000` crawls, and the scenario task makes you design the replacement for an infinite-scroll feed. Both hinge on one mechanism: **OFFSET does not jump, it skips** - and skipping means walking. Once that is visceral, the keyset shape `WHERE id > last_seen` writes itself."
+          }
+        },
+        {
+          "key": "offset",
+          "kind": "heading",
+          "title": "Why OFFSET degrades"
+        },
+        {
+          "key": "offset-text",
+          "kind": "prose",
+          "payload": {
+            "text": "To return rows 100001-100020, `LIMIT 20 OFFSET 100000` still has to **evaluate and discard the first 100000 matching rows** - and the work grows linearly with page depth. An index does not rescue you: the engine still walks the ordered rows and throws away the ones before the offset. OFFSET pagination is O(page); the deeper the page, the more rows discarded for nothing."
+          }
+        },
+        {
+          "key": "offset-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "Counting the waste on the infinite-scroll feed",
+            "steps": [
+              {
+                "title": "Page 1 is cheap",
+                "text": "`LIMIT 20 OFFSET 0` - return the first 20 rows; nothing discarded.",
+                "state": "visits 20 rows"
+              },
+              {
+                "title": "Deep pages discard almost everything",
+                "text": "At `OFFSET 100000` the database walks and drops 100000 rows to hand back 20 - the classic 'page 5001 crawls' symptom.",
+                "state": "visits 100020 rows, returns 20"
+              },
+              {
+                "title": "Cost scales with depth",
+                "text": "Each additional page adds another 20 rows of discard work. Users never notice on page 2; they always notice at page 5000.",
+                "state": "O(page) cost"
+              }
+            ]
+          }
+        },
+        {
+          "key": "keyset",
+          "kind": "heading",
+          "title": "Keyset: a bookmark instead of a skip"
+        },
+        {
+          "key": "keyset-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Keyset (cursor) pagination remembers the **last value of the sort key** and asks for 'the rows after that'. Because the key is indexed and unique (usually the primary key), the engine seeks directly to the position - O(log n) at any depth - instead of walking and discarding. The client passes the last id it saw back as the cursor."
+          }
+        },
+        {
+          "key": "keyset-code",
+          "kind": "code",
+          "payload": {
+            "code": "-- page 1\nSELECT id, title FROM posts ORDER BY id DESC LIMIT 20;\n-- client keeps the last id it saw, say 4213\n\n-- page 2 and beyond\nSELECT id, title FROM posts WHERE id < 4213\nORDER BY id DESC LIMIT 20;",
+            "title": "First page, then every next page",
+            "lang": "sql"
+          }
+        },
+        {
+          "key": "tiebreak",
+          "kind": "heading",
+          "title": "Non-unique sort keys need a tiebreaker"
+        },
+        {
+          "key": "tiebreak-text",
+          "kind": "prose",
+          "payload": {
+            "text": "If the sort key is not unique (say the feed is `ORDER BY score DESC`), two rows can share a score and `WHERE score < ?` would silently **skip or duplicate** rows at the boundary. The fix is a composite cursor that sorts by `(score, id)` and filters on both: the id tiebreaker makes the position unambiguous. MySQL has no row-value `<` syntax in WHERE, so the composite condition expands to the boolean form."
+          }
+        },
+        {
+          "key": "tiebreak-code",
+          "kind": "code",
+          "payload": {
+            "code": "-- composite cursor: (score, id) is unique and ordered\nSELECT id, title FROM posts\nWHERE score < ?\n   OR (score = ? AND id < ?)\nORDER BY score DESC, id DESC\nLIMIT 20;",
+            "title": "The MySQL boolean form of a composite cursor",
+            "lang": "sql"
+          }
+        },
+        {
+          "key": "tradeoff",
+          "kind": "heading",
+          "title": "What you trade away"
+        },
+        {
+          "key": "tradeoff-table",
+          "kind": "table",
+          "payload": {
+            "title": "OFFSET vs keyset",
+            "headers": [
+              "Question",
+              "OFFSET (paginate)",
+              "Keyset (cursor)"
+            ],
+            "rows": [
+              [
+                "Cost at depth",
+                "grows with page number",
+                "constant - one indexed seek"
+              ],
+              [
+                "Jump to any page?",
+                "yes",
+                "no - only next/previous from a cursor"
+              ],
+              [
+                "Total count",
+                "cheap companion COUNT query",
+                "needs a separate COUNT if you want it"
+              ],
+              [
+                "Rows inserted between pages",
+                "boundaries shift; rows can repeat or skip",
+                "naturally tolerated - new rows just precede the cursor"
+              ],
+              [
+                "Laravel API",
+                "paginate()",
+                "cursorPaginate()"
+              ]
+            ],
+            "mono": [
+              0
+            ],
+            "note": "The trade-off is real: keyset shines for infinite scroll and API feeds where 'next page' is all the client needs."
+          }
+        },
+        {
+          "key": "senior",
+          "kind": "callout",
+          "payload": {
+            "tone": "tip",
+            "title": "The senior add-on: a stable tiebreaker",
+            "text": "Even with an id sort, a feed ordered by time is usually `ORDER BY created_at DESC, id DESC` - two posts can share a timestamp, so the id tiebreaker guarantees nothing is skipped or repeated between pages. Say this unprompted and you have answered the task's 'tiebreaker' rubric point before it is asked."
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Interview framing that lands: 'OFFSET pagination is O(page) because skipping means scanning; keyset replaces the skip with a bookmark on the sort key and stays O(log n) - you give up jumping to page 5000, which infinite scroll never needed anyway.' Laravel's `cursorPaginate()` encodes the cursor for you - same idea the dojo's cursor tasks exercise."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "sql-injection-defense",
+      "title": "SQL injection: bind values, allow-list the rest",
+      "summary": "Prepared statements send SQL structure and data separately, so user input can never become syntax. Learn why binding is the primary defense, where it stops working (identifiers like ORDER BY columns cannot be bound), and how an allow-list fixes the dynamic-ORDER BY case in layers.",
+      "minutes": 9,
+      "difficulty": "medium",
+      "tags": [
+        "sql-injection",
+        "prepared-statements",
+        "security",
+        "laravel",
+        "symfony",
+        "sql"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The quiz asks which techniques are actually safe; the review task makes you defend a codebase in layers. The through-line is short: **a value and a piece of SQL are different things, and the moment you concatenate them you have lost the distinction**. Everything else - placeholders, query builders, allow-lists, least privilege - is about keeping that line drawn."
+          }
+        },
+        {
+          "key": "principle",
+          "kind": "heading",
+          "title": "Structure and data travel separately"
+        },
+        {
+          "key": "principle-text",
+          "kind": "prose",
+          "payload": {
+            "text": "A prepared statement sends the SQL **structure** (with placeholders) and the **data** separately, so a malicious value is treated as a literal - never as syntax. If input is concatenated into the string, the value `' OR '1'='1` stops being data and becomes part of the WHERE clause. That is the entire attack class, and parameterization is the entire primary defense: `PDO::prepare` + `execute`, Laravel's `DB::select('... WHERE x = ?', [$x])`, Eloquent's `where('x', $x)` and Doctrine's `setParameter` all bind values."
+          }
+        },
+        {
+          "key": "matrix",
+          "kind": "heading",
+          "title": "Which techniques are safe"
+        },
+        {
+          "key": "matrix-table",
+          "kind": "table",
+          "payload": {
+            "title": "Quiz options, judged",
+            "headers": [
+              "Approach",
+              "Safe?",
+              "Why"
+            ],
+            "rows": [
+              [
+                "Prepared statements with placeholders",
+                "yes",
+                "structure and data travel separately"
+              ],
+              [
+                "Concatenating user input into SQL",
+                "**no**",
+                "the injection vector itself"
+              ],
+              [
+                "ORM query builder: where('id', $id)",
+                "yes",
+                "the builder binds values for you"
+              ],
+              [
+                "Escaping quotes by hand with addslashes()",
+                "**no**",
+                "misses character-set and quoting nuances; escaping is not a defense"
+              ],
+              [
+                "Casting a numeric id to int",
+                "yes (narrow)",
+                "validated numeric literal - safe for this case, fragile as a general policy"
+              ]
+            ],
+            "mono": [
+              0
+            ],
+            "note": "The bold row is the habit to kill: escaping input is one mistake away from injection, binding values removes the class of bug."
+          }
+        },
+        {
+          "key": "raw",
+          "kind": "heading",
+          "title": "Raw SQL and query builders all bind"
+        },
+        {
+          "key": "raw-code",
+          "kind": "code",
+          "payload": {
+            "code": "// Laravel raw select - bind with ?\nDB::select('SELECT * FROM users WHERE status = ?', [$status]);\n\n// Eloquent query builder - binds under the hood\nUser::where('status', $status)->get();\n\n// Doctrine - setParameter binds values\n$q = $em->createQuery('SELECT u FROM User u WHERE u.status = :s');\n$q->setParameter('s', $status);",
+            "title": "Binding everywhere, raw SQL included",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "ident",
+          "kind": "heading",
+          "title": "Where binding stops: identifiers"
+        },
+        {
+          "key": "ident-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Placeholders only ever represent **values**. Table names, column names and structural fragments like the direction in `ORDER BY` cannot be bound - `ORDER BY ?` is not a thing the server will sort by your value. So the helper that interpolates a user-supplied sort column into `ORDER BY $sort` is an injection point no matter how carefully the rest of the query is bound; the attacker who controls `$sort` controls what follows the ORDER BY keyword."
+          }
+        },
+        {
+          "key": "allow",
+          "kind": "heading",
+          "title": "The allow-list fix for dynamic identifiers"
+        },
+        {
+          "key": "allow-code",
+          "kind": "code",
+          "payload": {
+            "code": "$allowed = [\n    'name'    => 'name',\n    'date'    => 'created_at',\n    'revenue' => 'total',\n];\n\n$column = $allowed[$request->input('sort')] ?? 'created_at';\n$dir    = in_array($request->input('dir'), ['asc', 'desc'], true)\n              ? $request->input('dir')\n              : 'asc';\n\n$rows = DB::table('posts')->orderBy($column, $dir)->get();",
+            "title": "Map the user's choice to a legal value; fall back to a default",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "layers",
+          "kind": "heading",
+          "title": "Defense in layers"
+        },
+        {
+          "key": "layers-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "The reviewer's checklist",
+            "steps": [
+              {
+                "title": "Bind every value, everywhere",
+                "text": "Raw SQL included: `DB::select` with `?` placeholders, the query builder, Doctrine `setParameter`.",
+                "state": "no concatenated values"
+              },
+              {
+                "title": "Never escape by hand",
+                "text": "`addslashes()` is not a defense - drop it from review comments and code alike.",
+                "state": "no hand escaping"
+              },
+              {
+                "title": "Allow-list identifiers and keywords",
+                "text": "Column names, table names, sort direction: map input to a fixed set with a default; never interpolate the raw choice.",
+                "state": "no raw identifiers"
+              },
+              {
+                "title": "Prefer the ORM / query builder",
+                "text": "Binding becomes the default path and dynamic identifiers stay rare and visible.",
+                "state": "safe by default"
+              },
+              {
+                "title": "Least privilege as a backstop",
+                "text": "The app's DB account should have no DDL and minimal grants, so even a successful injection is bounded.",
+                "state": "bounded blast radius"
+              }
+            ]
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "The scenario task grades exactly this ladder: name parameterization and what it protects, name identifiers as the place binding cannot reach, fix ORDER BY with an allow-list, and finish with least privilege. Quiz variant: be ready to justify why the `(int)` cast is 'safe for that specific case' but fragile as a general policy - the moment the field becomes a string, the habit breaks."
+          }
+        }
+      ]
+    }
+  ]
+}

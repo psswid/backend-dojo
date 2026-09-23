@@ -3,6 +3,7 @@
 namespace App\Livewire;
 
 use App\Models\Attempt;
+use App\Models\Draft;
 use App\Models\Task;
 use App\Services\CodeRunner;
 use App\Services\Llm\TaskEvaluator;
@@ -32,6 +33,11 @@ class TaskSession extends Component
 
     public bool $hintLoading = false;
 
+    /** @var 'saved'|'restored'|null */
+    public ?string $draftState = null;
+
+    public ?string $draftSavedAt = null;
+
     public function mount(?Task $task = null): void
     {
         $this->taskId = $task?->id;
@@ -39,12 +45,95 @@ class TaskSession extends Component
         if ($task && $task->starter_code !== null) {
             $this->code = $task->starter_code;
         }
+
+        // Resume a previous session's work so a refresh does not wipe the draft.
+        if ($task && ($draft = $this->findDraft($task)) !== null) {
+            $payload = $draft->payload ?? [];
+
+            if ($task->type === 'scenario') {
+                if (! empty($payload['answer'])) {
+                    $this->answer = $payload['answer'];
+                }
+            } elseif (! empty($payload['code'])) {
+                $this->code = $payload['code'];
+            }
+
+            $this->draftState = 'restored';
+            $this->draftSavedAt = $draft->updated_at?->format('H:i');
+        }
     }
 
     public function getCurrentTaskProperty(): ?Task
     {
         return $this->taskId ? Task::with('topic')->find($this->taskId) : null;
     }
+
+    // ---- draft persistence -------------------------------------------------
+
+    /** Livewire hook: fired when `code` arrives from the debounced autosave. */
+    public function updatedCode(): void
+    {
+        $this->persistDraft();
+    }
+
+    /** Livewire hook: fired when `answer` arrives from the debounced autosave. */
+    public function updatedAnswer(): void
+    {
+        $this->persistDraft();
+    }
+
+    public function saveDraft(): void
+    {
+        $this->persistDraft();
+    }
+
+    public function resetDraft()
+    {
+        $task = $this->currentTask;
+
+        if ($task) {
+            Draft::where('user_id', $this->currentUserId())->where('task_id', $task->id)->delete();
+        }
+
+        return redirect(request()->url());
+    }
+
+    private function findDraft(Task $task): ?Draft
+    {
+        $userId = $this->currentUserId();
+
+        return $userId ? Draft::where('user_id', $userId)->where('task_id', $task->id)->first() : null;
+    }
+
+    private function persistDraft(): void
+    {
+        $task = $this->currentTask;
+
+        if (! $task || ! ($userId = $this->currentUserId())) {
+            return;
+        }
+
+        $content = $task->type === 'scenario' ? $this->answer : $this->code;
+
+        if (trim($content) === '') {
+            return;
+        }
+
+        Draft::updateOrCreate(
+            ['user_id' => $userId, 'task_id' => $task->id],
+            ['payload' => $task->type === 'scenario' ? ['answer' => $this->answer] : ['code' => $this->code]]
+        );
+
+        $this->draftState = 'saved';
+        $this->draftSavedAt = now()->format('H:i:s');
+    }
+
+    private function currentUserId(): ?int
+    {
+        return auth()->id();
+    }
+
+    // ---- task actions --------------------------------------------------------
 
     public function runTests(CodeRunner $runner): void
     {
@@ -54,6 +143,7 @@ class TaskSession extends Component
             return;
         }
 
+        $this->persistDraft();
         $result = $runner->run($this->code, (string) $task->test_suite);
         $this->output = $result['stdout'];
         $this->passed = $result['passed'];
@@ -67,6 +157,7 @@ class TaskSession extends Component
             return;
         }
 
+        $this->persistDraft();
         $result = $runner->run($this->code, (string) $task->test_suite);
         $this->output = $result['stdout'];
         $this->passed = $result['passed'];
@@ -82,6 +173,7 @@ class TaskSession extends Component
             return;
         }
 
+        $this->persistDraft();
         $this->evaluating = true;
         $this->aiFeedback = null;
 

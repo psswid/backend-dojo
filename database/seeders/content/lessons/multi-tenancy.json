@@ -1,0 +1,1238 @@
+{
+  "topic_slug": "multi-tenancy",
+  "lessons": [
+    {
+      "slug": "tenancy-models",
+      "title": "Tenancy data models: pooled, schema-per-tenant, database-per-tenant",
+      "summary": "Every multi-tenant SaaS starts with one decision: where each customer's rows physically live. This lesson maps the three canonical models — one shared schema with a tenant_id column, per-tenant Postgres schemas, and database-per-tenant — and the pressures that justify leaving the pool.",
+      "minutes": 8,
+      "difficulty": "easy",
+      "tags": [
+        "multi-tenancy",
+        "tenancy-models",
+        "data-isolation",
+        "migration",
+        "scale",
+        "hybrid-tenancy",
+        "architecture",
+        "design",
+        "isolation"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The module opens with the model-picker question and a multi-select about when pooling breaks. Both test whether you can tie the **data model** to its operational consequences: what is cheapest to operate, what demands the most discipline in code, and what you actually buy when you isolate one tenant. The scenario task's first rubric line is exactly that: 'isolation-model choice is justified against the product's isolation, compliance, and scaling requirements'."
+          }
+        },
+        {
+          "key": "models",
+          "kind": "heading",
+          "title": "The three canonical models"
+        },
+        {
+          "key": "model-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Multi-tenant means one application serves many customers, and each customer's data must stay invisible to every other customer. The models differ in **where the rows live** — and therefore in who enforces the separation:"
+          }
+        },
+        {
+          "key": "model-table",
+          "kind": "table",
+          "payload": {
+            "headers": [
+              "Model",
+              "Data layout",
+              "Isolation enforced by",
+              "Ops cost",
+              "Best when"
+            ],
+            "rows": [
+              [
+                "Pooled (shared DB)",
+                "one schema, `tenant_id` on every tenant-owned table",
+                "application code (scoping)",
+                "lowest — one DB to back up, migrate, monitor",
+                "default for most B2B SaaS"
+              ],
+              [
+                "Schema-per-tenant",
+                "one database, one Postgres schema per tenant",
+                "database (via `search_path` / schema switching)",
+                "medium — one server, per-schema migrations",
+                "the Postgres middle path"
+              ],
+              [
+                "Database-per-tenant",
+                "separate database per tenant (`tenant_1`, `tenant_2`, ...)",
+                "database (physical separation)",
+                "highest — migrations, backups, pools, provisioning multiply",
+                "hard isolation or compliance needs"
+              ]
+            ],
+            "title": "The three isolation models at a glance",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "pooled-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The pooled model keeps **one schema for all tenants** and discriminates rows with a `tenant_id` column. Its appeal is operational simplicity: one database to back up, migrate and monitor, and cross-tenant analytics are trivial joins across shared tables. The price: isolation is an **application concern** — every query path must be scoped to the current tenant, and one heavy tenant can degrade everyone else (the noisy-neighbour problem)."
+          }
+        },
+        {
+          "key": "per-tenant-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Database-per-tenant gives **hard physical separation** — you can drop, restore or encrypt an entire tenant's database — but it multiplies the operational surface: every migration, backup, connection pool and provisioning step now runs per tenant (in stancl/tenancy you apply schema across all of them with `php artisan tenants:migrate`). Schema-per-tenant sits between the two on Postgres: logical separation inside one database by switching the connection's `search_path` or schema."
+          }
+        },
+        {
+          "key": "model-figure",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-flow\">\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-a\">WHERE tenant_id = ?<span class=\"tag\">pooled</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-a\">one shared table<span class=\"tag\">scope every query</span></span>\n  </div>\n  <div class=\"ld-col\"><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-b\">switch search_path<span class=\"tag\">schema-per-tenant</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-b\">one DB, per-tenant schemas<span class=\"tag\">Postgres only</span></span>\n  </div>\n  <div class=\"ld-col\"><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-c\">boot tenant connection<span class=\"tag\">database-per-tenant</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-c\">tenant_N database<span class=\"tag\">hard separation</span></span>\n  </div>\n</div>",
+            "title": "The mechanism each model uses to keep tenants apart",
+            "caption": "Pooled isolates rows with an app-level predicate, schema-per-tenant switches the connection's search_path, database-per-tenant swaps the whole connection to a different database."
+          }
+        },
+        {
+          "key": "drivers",
+          "kind": "heading",
+          "title": "When the pool breaks"
+        },
+        {
+          "key": "driver-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The shared/`tenant_id` model is the cheapest to operate and the one that demands the most discipline. It breaks down under concrete pressures — the multi-select question asks you to recognise which of these are real:"
+          }
+        },
+        {
+          "key": "driver-list",
+          "kind": "prose",
+          "payload": {
+            "text": "- **Noisy neighbour** — a tenant's heavy ad-hoc queries exhaust connection pools or lock hot tables, degrading response times for every other tenant.\n- **Compliance and residency** — a contract requires physically deleting or legally segregating a customer's data, or keeping data inside a specific jurisdiction; carving rows out of shared tables is painful and risky, while per-tenant databases can simply be dropped or encrypted.\n- **Per-tenant operational lifecycle** — per-tenant backup/restore points, and migrating or rolling back one tenant's schema at its own pace.\n- **Scale** — tens of millions of shared rows, hot-table lock contention, index bloat, and no way to keep per-tenant retention or archival policies."
+          }
+        },
+        {
+          "key": "driver-traps",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "A plain unique index on `slug` being 'slower than a composite one' is **not** a reason to isolate — the composite `unique(['tenant_id', 'slug'])` index was always the right design, and the plain index is a correctness bug: tenant A registering `slug` would silently block every other tenant from using it. And cross-tenant CFO reporting becomes **harder** after isolation, because data now spans databases — budget a warehouse, `dblink`/`postgres_fdw` aggregation, or app-level fan-out from day one.",
+            "title": "The two traps in the 'justify isolation' question"
+          }
+        },
+        {
+          "key": "hybrid",
+          "kind": "heading",
+          "title": "The hybrid answer"
+        },
+        {
+          "key": "hybrid-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Most SaaS never needs one model for everyone. The hybrid/elastic-pool pattern stops treating tenancy as a single flag: each `Tenant` record carries a **storage target** (a database name or a connection name resolved through a tenant-aware connection factory), and the resolution logic picks the shared pool connection for most tenants and tenant-specific connections for the migrated ones. The eight-year-old scenario in this module ends exactly there: two enterprise tenants move to their own databases while the other ~38 stay pooled."
+          }
+        },
+        {
+          "key": "hybrid-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Record the storage target",
+                "text": "The `Tenant` row no longer implies a model; it says where its data lives — e.g. a `database_name` column or a connection name. No other part of the app needs to know which model a tenant uses.",
+                "state": "tenant row → connection target"
+              },
+              {
+                "title": "Resolve per request",
+                "text": "Tenant resolution reads the target and boots the matching connection for the request — the pooled connection for most tenants, the tenant's own database for the migrated ones.",
+                "state": "pooled or tenant-specific connection"
+              },
+              {
+                "title": "Keep it reversible",
+                "text": "A per-tenant routing record or feature flag keeps the switch reversible, so a cutover can fall back to pooled reads instantly.",
+                "state": "rollback ready"
+              }
+            ],
+            "title": "How the hybrid works for one tenant",
+            "intro": "Schema-per-tenant is the same idea one level down: per-schema migrations and tenants on one Postgres server."
+          }
+        },
+        {
+          "key": "why",
+          "kind": "callout",
+          "payload": {
+            "tone": "why",
+            "text": "For most B2B SaaS, a shared database with `tenant_id` scoped by a global scope is the sensible default; reserve database- or schema-per-tenant for customers with genuine isolation, compliance or per-tenant lifecycle requirements. The senior signal is defending the default **and** naming the exact pressure that would change it — not picking a model by fashion.",
+            "title": "Default to the pool, earn the exception"
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "The scenario task 'Design a data-leak-proof multi-tenant Laravel SaaS' wants this decision argued, not asserted. Once the model is chosen, the work moves to scoping every query (next lesson), resolving the tenant (the resolution lesson), and — when tenants leave the pool — provisioning and migrating tenant databases (the provisioning lesson)."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "scoping-shared-schema",
+      "title": "Scoping a shared schema: global scopes, uniqueness, validation",
+      "summary": "A global scope is what makes every Eloquent query on a tenant-owned model carry WHERE tenant_id = ? automatically. This lesson shows how to register one, where its power ends (query builder, validation rules, uniqueness), and how per-tenant constraints must be enforced at the database instead.",
+      "minutes": 10,
+      "difficulty": "medium",
+      "tags": [
+        "multi-tenancy",
+        "laravel",
+        "global-scopes",
+        "scoping",
+        "data-isolation",
+        "validation",
+        "uniqueness",
+        "security",
+        "isolation"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Two module questions sit on this exact tool: the easy one asks which Laravel mechanism adds the tenant predicate automatically, and the hard 'true statements' question probes where that mechanism **stops**. Read them as one lesson: global scopes are the flagship of shared-schema tenancy, and every interview follow-up is about their boundary."
+          }
+        },
+        {
+          "key": "mech",
+          "kind": "heading",
+          "title": "The mechanism: registering a global scope"
+        },
+        {
+          "key": "mech-text",
+          "kind": "prose",
+          "payload": {
+            "text": "A global scope is registered on the **model itself**, so every query that goes through the model is constrained — selects, eager loads, and even model-based updates and deletes. The scope's `apply()` method receives the query builder and adds `WHERE tenant_id = <current tenant>`. Because the scoping logic lives on the model, a junior developer adding a controller that queries `Order` is automatically protected — that is the whole point."
+          }
+        },
+        {
+          "key": "mech-code",
+          "kind": "code",
+          "payload": {
+            "code": "use Illuminate\\Database\\Eloquent\\Builder;\nuse Illuminate\\Database\\Eloquent\\Model;\nuse Illuminate\\Database\\Eloquent\\Scope;\n\nclass TenantScope implements Scope\n{\n    public function apply(Builder $builder, Model $model): void\n    {\n        $builder->where('tenant_id', Tenant::current()->id);\n    }\n}\n\nclass Order extends Model\n{\n    protected static function booted(): void\n    {\n        static::addGlobalScope(new TenantScope);\n    }\n}\n\n// Lightweight closure variant — same effect, registered in booted():\nclass Post extends Model\n{\n    protected static function booted(): void\n    {\n        static::addGlobalScope(fn (Builder $b) => $b->where('tenant_id', tenant('id')));\n    }\n}",
+            "lang": "php",
+            "title": "Scope class + closure variant",
+            "caption": "Register in booted(); the scope runs for every Eloquent query on the model."
+          }
+        },
+        {
+          "key": "boundary",
+          "kind": "heading",
+          "title": "Where the scope ends"
+        },
+        {
+          "key": "boundary-table",
+          "kind": "table",
+          "payload": {
+            "headers": [
+              "Query path",
+              "Tenant predicate?",
+              "Why"
+            ],
+            "rows": [
+              [
+                "`Order::all()` / `Order::where(...)`",
+                "yes",
+                "the registered scope runs on the model's queries"
+              ],
+              [
+                "`Order::with('items')->get()`",
+                "yes",
+                "children are loaded through the scoped `Order` parent"
+              ],
+              [
+                "`Order::find($id)`; model `update()` / `delete()`",
+                "yes",
+                "they build the query through the scoped model"
+              ],
+              [
+                "`DB::table('orders')->select(...)`",
+                "**no**",
+                "the query builder has no model, hence no scopes"
+              ],
+              [
+                "a fresh query builder or raw SQL",
+                "**no**",
+                "low-level database queries are never scoped"
+              ],
+              [
+                "`Rule::unique('orders', 'slug')`",
+                "**no**",
+                "validation queries the table directly, not via a model"
+              ]
+            ],
+            "title": "Every query path, scoped or not",
+            "mono": [
+              0
+            ],
+            "em": [
+              2
+            ]
+          }
+        },
+        {
+          "key": "boundary-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The two rows that matter for interviews: scopes ride on the **Eloquent** builder, so `DB::table()` and raw SQL are outside them; and validation rules validate against the table directly, never through a model. Both failures are silent — nothing throws, the query just runs without the tenant predicate. Statement by statement, that is the whole 'true statements' quiz question."
+          }
+        },
+        {
+          "key": "secondary",
+          "kind": "heading",
+          "title": "Secondary models need the parent"
+        },
+        {
+          "key": "secondary-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The global scope lives on `Order`. A related model — say `OrderItem` with `belongsTo(Order::class)` — has **no scope of its own**, so a direct `OrderItem::all()` runs without a tenant predicate. It is only safe when reached through a scoped parent, because the children inherit the parent's scope. stancl/tenancy answers this with the `BelongsToPrimaryModel` trait, which scopes secondary-model queries by loading through the parent relationship; deeper chains (`Vote` belongs to `OrderItem` belongs to `Order`) still need care."
+          }
+        },
+        {
+          "key": "secondary-code",
+          "kind": "code",
+          "payload": {
+            "code": "// SAFE — every item comes from orders the scope already filtered:\nOrder::with('items')->get();\n\n// LEAK VECTOR — no Order scope is in play, so no tenant predicate\n// is ever added to this query:\nOrderItem::where('sku', $sku)->first();",
+            "lang": "php",
+            "title": "Load children through the scoped parent"
+          }
+        },
+        {
+          "key": "unique",
+          "kind": "heading",
+          "title": "Uniqueness: scopes cannot reach the database"
+        },
+        {
+          "key": "unique-text",
+          "kind": "prose",
+          "payload": {
+            "text": "A global scope filters rows at **read time**; it cannot stop two tenants from writing the same slug, because uniqueness is enforced by the database at write time. In a shared table, per-tenant uniqueness needs a **composite unique index** — `unique(['tenant_id', 'slug'])`. A plain unique index on `slug` is global: tenant A registering `dashboard` makes it unavailable to every other tenant, silently."
+          }
+        },
+        {
+          "key": "unique-code",
+          "kind": "code",
+          "payload": {
+            "code": "Schema::create('posts', function (Blueprint $table) {\n    $table->id();\n    $table->unsignedBigInteger('tenant_id');\n    $table->string('slug');\n\n    // Correct: uniqueness is per tenant.\n    $table->unique(['tenant_id', 'slug']);\n\n    // WRONG: ->unique('slug') — tenant A's 'dashboard' would block\n    // every other tenant from ever using that slug, with no error.\n});",
+            "lang": "php",
+            "title": "Per-tenant uniqueness is a database constraint"
+          }
+        },
+        {
+          "key": "valid",
+          "kind": "heading",
+          "title": "Validation rules hit the same boundary"
+        },
+        {
+          "key": "valid-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`Rule::unique('posts', 'slug')` validates against the table directly through the validator, which never applies model global scopes — so a slug that exists in another tenant would fail validation for this tenant. You must add the tenant predicate yourself, or use a helper such as stancl/tenancy's `HasScopedValidationRules` trait."
+          }
+        },
+        {
+          "key": "valid-code",
+          "kind": "code",
+          "payload": {
+            "code": "use Illuminate\\Validation\\Rule;\n\n$rules = [\n    'slug' => [\n        'required',\n        Rule::unique('posts')->where(fn ($q) => $q->where('tenant_id', tenant('id'))),\n    ],\n];",
+            "lang": "php",
+            "title": "Scoping Rule::unique by hand"
+          }
+        },
+        {
+          "key": "watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "Three tools, three layers: global scopes constrain **Eloquent reads**; composite unique indexes enforce **per-tenant uniqueness at the database**; scoped validation rules make `Rule::unique` tenant-aware. Do not look for a way to make one of them do another's job — the interview question is whether you know which layer owns which guarantee.",
+            "title": "Scopes for reads, constraints for writes"
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "The module's drills make the same boundaries concrete in plain PHP: `scoped_where` applies AND-style criteria with strict `===` semantics and excludes any row that misses the `tenant_id` key, exactly like a scoped query rejects rows without a tenant. The next lesson covers the dark side of this design: every place the scope can silently stop applying."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "fail-closed-scoping",
+      "title": "Fail closed: the forgotten tenant filter and leak vectors",
+      "summary": "Tenant scoping that quietly stops scoping is this module's darkest failure mode: a scheduled job, a queue worker or a raw query runs with no tenant predicate and reads everyone's rows — silently. Learn the trap mechanics, the four classic leak vectors, the fail-closed rule, and how the module's plain-PHP drills encode the same discipline.",
+      "minutes": 12,
+      "difficulty": "hard",
+      "tags": [
+        "multi-tenancy",
+        "global-scopes",
+        "scoping",
+        "trap",
+        "queues",
+        "data-leak",
+        "debugging",
+        "audit",
+        "security",
+        "fail-closed",
+        "array-filtering",
+        "strict-comparison",
+        "isolation"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Three module questions are built on one bug class: the trap question about the 03:00 digest job, the audit multi-select of leak vectors, and the debugging scenario of tenant Alpha seeing tenant Beta's draft orders. They share a moral — **tenant isolation must fail closed, never open** — and the module's debug tasks (`filter_by_tenant`, `assert_scoped`) train the same reflex without a database."
+          }
+        },
+        {
+          "key": "trap",
+          "kind": "heading",
+          "title": "The trap: no tenant context outside HTTP"
+        },
+        {
+          "key": "trap-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`Tenant::current()` — or any request-derived context — is **null outside the HTTP lifecycle**: queue workers, the scheduler at 03:00, tinker, console imports. In a scheduled job no request middleware ever identified a tenant. If the scope was written to trust optional context, the tenant predicate silently vanishes: no exception, no log entry, just a quiet full-table read at 3 a.m. that can pour tenant B's data into tenant A's digest."
+          }
+        },
+        {
+          "key": "trap-code",
+          "kind": "code",
+          "payload": {
+            "code": "// The vulnerable shape: scoping that trusts optional context.\nclass Order extends Model\n{\n    protected static function booted(): void\n    {\n        static::addGlobalScope(function (Builder $builder) {\n            $tenantId = Tenant::current()?->id;   // null in workers, scheduler, tinker\n\n            if ($tenantId === null) {\n                return;                           // contributes NO predicate at all\n            }\n\n            $builder->where('tenant_id', $tenantId);\n        });\n    }\n}",
+            "lang": "php",
+            "title": "How a tenant scope no-ops",
+            "caption": "The `?->` plus the early `return` are the trap: outside HTTP the scope adds nothing to the query."
+          }
+        },
+        {
+          "key": "trap-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "The scheduler starts the job",
+                "text": "No HTTP request exists, so no middleware ran — `Tenant::current()` is `null`.",
+                "state": "no tenant identified"
+              },
+              {
+                "title": "The scope no-ops",
+                "text": "The closure returns early (or the null-safe operator hands null to the predicate), and the generated SQL carries no tenant restriction.",
+                "state": "no tenant predicate in the SQL"
+              },
+              {
+                "title": "The query reads everything",
+                "text": "`Order::cursor()` iterates rows from every tenant, and digest emails are built from the full table.",
+                "state": "every tenant's orders processed"
+              },
+              {
+                "title": "And nothing complains",
+                "text": "No exception is thrown, nothing is logged — the bug can ship other tenants' data for weeks before anyone notices.",
+                "state": "total silence"
+              }
+            ],
+            "title": "The 03:00 failure, frame by frame",
+            "intro": "This is the exact sequence the trap question describes."
+          }
+        },
+        {
+          "key": "vectors",
+          "kind": "heading",
+          "title": "The four classic leak vectors"
+        },
+        {
+          "key": "vectors-intro",
+          "kind": "prose",
+          "payload": {
+            "text": "Auditing a shared-schema app means finding every path that reaches data without going through the scoped model. The module's audit question names four, and the trap options teach which surfaces are actually safe:"
+          }
+        },
+        {
+          "key": "vectors-list",
+          "kind": "prose",
+          "payload": {
+            "text": "- **A search index that is not partitioned by tenant** — a Scout/Meilisearch/Elasticsearch sync of `Order` models puts documents in an index that search APIs filter by nothing, so autocomplete serves other tenants' documents even though the Eloquent query was clean.\n- **`DB::table()` and raw query builders** — the query builder has no model and therefore no scopes; internal reporting built on `DB::table('orders')->select(...)` bypasses the guard entirely.\n- **Secondary models queried directly** — `OrderItem::all()` has no tenant predicate because the scope lives on `Order`; only loading items through a scoped parent is safe.\n- **Jobs without tenant context** — a queued job dispatched with no tenant booted re-opens the door whenever the scope does not fail closed.\n- Safe by contrast: eager-loading `items` through `Order` is the recommended path, and a migration changes schema, not row visibility."
+          }
+        },
+        {
+          "key": "vectors-fig",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-flow\">\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-a\">Order::with(\"items\")<span class=\"tag\">scoped model</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-a\">WHERE tenant_id = ?<span class=\"tag\">guard runs</span></span>\n  </div>\n  <div class=\"ld-col\"><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-r\">DB::table(\"orders\")<span class=\"tag\">no model</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-r\">OrderItem::all()<span class=\"tag\">no scope on parent</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-r\">job, no tenant<span class=\"tag\">scope no-ops</span></span>\n  </div>\n  <div class=\"ld-col\"><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-r\">Scout index<span class=\"tag\">not partitioned</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-r\">other tenants' rows<span class=\"tag\">leak</span></span>\n  </div>\n</div>",
+            "title": "The guarded Eloquent path vs the four bypasses",
+            "caption": "One path is protected by the model scope; four others reach the same data with no tenant predicate."
+          }
+        },
+        {
+          "key": "fail",
+          "kind": "heading",
+          "title": "Fail closed, and prove it"
+        },
+        {
+          "key": "fail-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The fix is a policy, not a line: a tenant-owned model must **throw when no tenant context exists** rather than return an open query. The module's `assert_scoped` task is the distilled version — the moment one row is not scoped to the tenant, the function returns `[]` instead of silently filtering it out. The tests that catch this class of bug: an integration test that runs the job with **no tenant booted** and asserts the query returns zero rows or throws, and one impersonating tenant A that asserts tenant B's rows are unreachable."
+          }
+        },
+        {
+          "key": "fail-code",
+          "kind": "code",
+          "payload": {
+            "code": "// Fail-closed scope: no tenant context => loud exception.\nclass Order extends Model\n{\n    protected static function booted(): void\n    {\n        static::addGlobalScope(function (Builder $builder) {\n            $tenantId = Tenant::current()?->id;\n\n            throw_unless($tenantId !== null, new RuntimeException(\n                'Tenant-owned query outside tenant context'\n            ));\n\n            $builder->where('tenant_id', $tenantId);\n        });\n    }\n}\n\n// The two tests that prove it:\nclass OrderIsolationTest extends TestCase\n{\n    public function test_queries_fail_closed_without_tenant(): void\n    {\n        $this->expectException(RuntimeException::class);\n        Order::first();\n    }\n\n    public function test_tenant_a_cannot_read_tenant_b(): void\n    {\n        actingAsTenant($tenantA, function () use ($tenantB) {\n            $this->assertNull(Order::where('tenant_id', $tenantB->id)->first());\n        });\n    }\n}",
+            "lang": "php",
+            "title": "The fail-closed scope and the two tests that prove it"
+          }
+        },
+        {
+          "key": "php",
+          "kind": "heading",
+          "title": "The same discipline in plain PHP — module drills"
+        },
+        {
+          "key": "drills-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "filter_by_tenant — scope on the column, not the row",
+                "text": "The planted bug is `in_array($tenantId, $row)`, which scans **every field** of each row: asking for tenant 9 also matches a row like `['id' => 9, 'tenant_id' => 3]` via its id column — a cross-tenant leak. Compare only the `tenant_id` column, strictly, and rows missing the key never match.",
+                "state": "tenant 9 → only the two real tenant-9 rows",
+                "code": "function filter_by_tenant(array $rows, int $tenantId): array\n{\n    $result = [];\n\n    foreach ($rows as $row) {\n        if (($row['tenant_id'] ?? null) === $tenantId) {\n            $result[] = $row;   // null !== 9, so a missing key never leaks in\n        }\n    }\n\n    return $result;\n}"
+              },
+              {
+                "title": "scoped_where — ownership AND criteria, strictly",
+                "text": "Both conditions must hold: the row belongs to `$tenantId` and matches every `key => value` in `$criteria` with strict `===` semantics. A row missing the `tenant_id` key, or missing any criteria key, is excluded; an empty criteria means 'tenant scope only'. So `['id' => 1]` does not match `['id' => '1']`, and a row without `status` never matches a status filter.",
+                "state": "criteria ['status' => 'paid'] on tenant 3 → only the paid row",
+                "code": "function scoped_where(array $rows, int $tenantId, array $criteria): array\n{\n    $result = [];\n\n    foreach ($rows as $row) {\n        if (($row['tenant_id'] ?? null) !== $tenantId) {\n            continue;                       // foreign or missing tenant_id\n        }\n\n        $ok = true;\n        foreach ($criteria as $k => $v) {\n            if (! array_key_exists($k, $row) || $row[$k] !== $v) {\n                $ok = false;                // strict: '1' !== 1\n                break;\n            }\n        }\n\n        if ($ok) {\n            $result[] = $row;\n        }\n    }\n\n    return $result;\n}"
+              },
+              {
+                "title": "assert_scoped — fail closed instead of filtering",
+                "text": "The broken version uses `array_filter` and silently drops offending rows, which **hides** the leak. The correct contract returns `[]` as soon as a single row is unscoped or belongs to another tenant — a data leak must be a loud failure, never a silent filter.",
+                "state": "any foreign/unscoped row → [] (whole result)",
+                "code": "function assert_scoped(array $rows, int $tenantId): array\n{\n    foreach ($rows as $row) {\n        if (($row['tenant_id'] ?? null) !== $tenantId) {\n            return [];      // one bad row invalidates everything\n        }\n    }\n\n    return $rows;           // all scoped: pass through unchanged\n}"
+              }
+            ],
+            "title": "The three drills, one discipline",
+            "intro": "Same reflex, no database: scope on the exact column, compare strictly, and fail loud."
+          }
+        },
+        {
+          "key": "debug",
+          "kind": "heading",
+          "title": "Debugging a live leak: the incident plan"
+        },
+        {
+          "key": "debug-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Freeze, capture, confirm scope",
+                "text": "Treat it as a security incident: stop the job, capture evidence, and establish exactly which rows leaked, to whom, and whether writes occurred.",
+                "state": "incident mode"
+              },
+              {
+                "title": "Reproduce deterministically",
+                "text": "Seed two tenants and run the suspect job — watch it fail before theorising.",
+                "state": "deterministic repro"
+              },
+              {
+                "title": "Audit by surface, in likelihood order",
+                "text": "First tenant context: does the job carry or iterate one, or does it assume one? Then the actual SQL — via the query log, Laravel Telescope, or `DB::listen` filtered to this job: if the generated SQL has no tenant predicate, the scope either no-opped (early return with no tenant) or was bypassed with `withoutGlobalScope(s)`/`withoutTenancy()`. Then cache key namespaces (`digest:user:42` is prime leak material), then the query path (model vs `DB::table` vs a secondary model), then search indices.",
+                "state": "context → SQL → cache → path → index"
+              },
+              {
+                "title": "Apply permanent safeguards",
+                "text": "Fail-closed scopes; every data-touching job explicitly tenant-aware; tenant-namespaced cache keys; RLS as a database backstop; alerting on unscoped full-table scans.",
+                "state": "leaks stop being silent"
+              }
+            ],
+            "title": "From first signal to root cause and back",
+            "intro": "The debugging scenario wants this plan, in this order."
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Ask at every design review: **what happens when this code runs with no tenant booted?** If the answer is 'the same queries, unfiltered', you have a leak waiting for a cron job. The trap question, the audit question and the debugging scenario are one story; the drills `filter_by_tenant`, `scoped_where` and `assert_scoped` are its plain-PHP muscle. Next, the tenant-aware infrastructure lesson — how jobs and cache get the context they need instead of hoping for leftovers."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "tenant-resolution-context",
+      "title": "Identifying the tenant: resolution and request context",
+      "summary": "Before any tenant-dependent code runs, the app must decide who is asking. Walk the three resolution strategies — subdomain, path segment, header or token — and why the resolved tenant must be bound into request context early, never read from client-controlled input.",
+      "minutes": 6,
+      "difficulty": "easy",
+      "tags": [
+        "multi-tenancy",
+        "tenant-resolution",
+        "stancl-tenancy",
+        "laravel",
+        "security",
+        "architecture",
+        "isolation",
+        "design"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The resolution question in this module is deceptively easy: for `https://acme.example.com` the tenant is identified by the **hostname**, matched early in the request lifecycle. Interviewers then push on the alternatives and their trade-offs, and the scenario task adds the security twist: tenant identity comes from request context, never from client input."
+          }
+        },
+        {
+          "key": "subdomain",
+          "kind": "heading",
+          "title": "Subdomain resolution is the default"
+        },
+        {
+          "key": "subdomain-text",
+          "kind": "prose",
+          "payload": {
+            "text": "In stancl/tenancy each `Tenant` record owns rows in the central `domains` table, and identification happens **early in the request lifecycle — before routing** — by matching the request host against that table, then initialising tenancy so the connection, cache and filesystem bootstrappers swap in tenant resources. Subdomains are clean for users and make tenant context unambiguous per URL; they demand wildcard DNS and per-domain TLS certificates."
+          }
+        },
+        {
+          "key": "alternatives",
+          "kind": "heading",
+          "title": "The alternatives and their costs"
+        },
+        {
+          "key": "alt-table",
+          "kind": "table",
+          "payload": {
+            "headers": [
+              "Strategy",
+              "Example",
+              "Main cost",
+              "Best for"
+            ],
+            "rows": [
+              [
+                "Subdomain",
+                "`acme.example.com`",
+                "wildcard DNS + per-domain TLS certificates",
+                "browser-facing SaaS (the default)"
+              ],
+              [
+                "Path prefix",
+                "`example.com/acme/...`",
+                "every route, URL generator, asset link and reverse-proxy rule must carry the segment",
+                "avoiding DNS and certificate sprawl"
+              ],
+              [
+                "Header / token",
+                "`X-Tenant` or a JWT claim",
+                "breaks plain browser use; spoofable unless authenticated",
+                "API / B2B token flows"
+              ]
+            ],
+            "title": "Three resolution strategies",
+            "mono": [
+              1
+            ]
+          }
+        },
+        {
+          "key": "alternatives-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Whatever the mechanism, resolution must happen **before any tenant-dependent code** — that is why it lives in middleware or bootstrappers rather than lazily inside controllers. A controller that guesses the tenant on first use is a controller that some code path will inevitably call before the guess has happened."
+          }
+        },
+        {
+          "key": "never",
+          "kind": "heading",
+          "title": "Never trust client input"
+        },
+        {
+          "key": "never-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The scenario task is explicit: resolve the tenant in middleware from the **subdomain or the authenticated user**, never from a client-controlled body parameter, and bind the resolved tenant into the container — a `TenantContext` singleton — for the whole request. A body parameter can be forged, replayed, or silently dropped by a caching layer; an authenticated session or a hostname cannot."
+          }
+        },
+        {
+          "key": "mid-code",
+          "kind": "code",
+          "payload": {
+            "code": "// A minimal, safe resolution middleware (sketch):\nclass ResolveTenantFromHost\n{\n    public function handle(Request $request, Closure $next)\n    {\n        $tenant = Tenant::query()\n            ->whereHas('domains', fn ($q) => $q->where('domain', $request->getHost()))\n            ->firstOrFail();                        // hostname => identity\n\n        app()->instance(TenantContext::class, new TenantContext($tenant));\n\n        return $next($request);\n    }\n}\n\n// Controllers read the bound context; they never resolve or guess:\n$current = app(TenantContext::class)->tenant();",
+            "lang": "php",
+            "title": "Resolve once, bind once, read everywhere"
+          }
+        },
+        {
+          "key": "why",
+          "kind": "callout",
+          "payload": {
+            "tone": "why",
+            "text": "Scopes read the current tenant when they run, jobs and cache bootstrappers read it when they boot, and views and URL generation read it all request long. If the value is only 'known' inside one controller, everything else runs with a missing or stale tenant — exactly the failure mode the fail-closed lesson describes. Resolution and binding are request plumbing, not business logic.",
+            "title": "Why early, and why bound"
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Resolution answers 'who is asking' in the central application. Its companion question — what happens when a brand-new customer signs up and needs a database, schema, seed data and a domain — is the provisioning lesson, driven by the module's signup-flow scenario."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "provisioning-and-migrations",
+      "title": "Provisioning tenants and migrating many databases",
+      "summary": "Creating a tenant in stancl/tenancy fires an event-driven pipeline that creates a database, migrates it, seeds it and attaches a domain — and doing it safely means queueing the work, making every step idempotent, and tracking a provisioning state. This lesson walks that flow, the central-versus-tenant migration split behind it, and what changes when you must move existing pooled tenants into their own databases.",
+      "minutes": 12,
+      "difficulty": "hard",
+      "tags": [
+        "multi-tenancy",
+        "stancl-tenancy",
+        "migrations",
+        "database-per-tenant",
+        "onboarding",
+        "provisioning",
+        "migration",
+        "hybrid-tenancy",
+        "architecture",
+        "design",
+        "string-formatting",
+        "deterministic",
+        "isolation"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Two module scenarios plus the migration quiz question are the same workflow from three angles: creating a tenant from scratch (the signup scenario), applying schema across every tenant database (the `tenants:migrate` question), and moving an existing pooled tenant into its own database (the hybrid scenario). The one-line snippet task `tenant_db_name` sits inside it too — deterministic names are how the pipeline knows which database belongs to whom."
+          }
+        },
+        {
+          "key": "pipeline",
+          "kind": "heading",
+          "title": "The provisioning pipeline, event by event"
+        },
+        {
+          "key": "pipeline-text",
+          "kind": "prose",
+          "payload": {
+            "text": "In stancl/tenancy v3 provisioning is **event-driven**: creating a `Tenant` — `Tenant::create([...])`, by default with a uuid or your chosen key — fires the `TenantCreated` event, and the package's configured listeners run the provisioning jobs in a fixed order."
+          }
+        },
+        {
+          "key": "pipeline-fig",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-col\">\n  <span class=\"ld-box ld-a\">Tenant::create()<span class=\"tag\">fires TenantCreated</span></span>\n  <span class=\"ld-down\">&#8595;</span>\n  <span class=\"ld-box ld-b\">CreateDatabase<span class=\"tag\">tenant_{id}</span></span>\n  <span class=\"ld-down\">&#8595;</span>\n  <span class=\"ld-box ld-b\">MigrateDatabase<span class=\"tag\">tenant migrations</span></span>\n  <span class=\"ld-down\">&#8595;</span>\n  <span class=\"ld-box ld-b\">SeedDatabase<span class=\"tag\">package seeders</span></span>\n  <span class=\"ld-down\">&#8595;</span>\n  <span class=\"ld-box ld-c\">your listeners<span class=\"tag\">base data + admin + domain</span></span>\n  <span class=\"ld-down\">&#8595;</span>\n  <span class=\"ld-box ld-a\">tenant active<span class=\"tag\">domain resolves</span></span>\n</div>",
+            "title": "From Tenant::create() to a live tenant",
+            "caption": "Order matters: the database must exist before migrations run, migrations before seed data, and your own listeners then attach base data, the first admin user and the domain."
+          }
+        },
+        {
+          "key": "pipeline-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "CreateDatabase",
+                "text": "Creates the tenant's database, by default named from the `tenancy.database.prefix`/`suffix` configuration — e.g. `tenant_{id}`. Rerunning it must tolerate a database that already exists (idempotency).",
+                "state": "database tenant_{id} exists"
+              },
+              {
+                "title": "MigrateDatabase",
+                "text": "Runs the `tenants:migrate` logic against that one database — the same engine that migrates all tenants at deploy time.",
+                "state": "schema applied"
+              },
+              {
+                "title": "SeedDatabase, then your listeners",
+                "text": "The package runs its seeders, then your own listeners add what the package cannot know: tenant base data (settings, plan defaults, roles/permissions) and the tenant's first admin user with a one-time setup token.",
+                "state": "admin user + defaults"
+              },
+              {
+                "title": "Attach the domain",
+                "text": "`$tenant->domains()->create(['domain' => 'acme.example.com'])` makes the subdomain resolvable — the resolution pipeline from the resolution lesson now finds this tenant.",
+                "state": "acme.example.com → tenant"
+              }
+            ],
+            "title": "The provisioning stages, in order",
+            "intro": "Each stage is a job, and each job must be safe to run twice."
+          }
+        },
+        {
+          "key": "fast",
+          "kind": "heading",
+          "title": "Keep the signup request fast"
+        },
+        {
+          "key": "fast-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Creating and migrating a fresh database takes seconds, so the provisioning jobs must run on the **queue**, not synchronously inside the signup request: the API or UI returns immediately, and the tenant record carries a provisioning state machine (`provisioning` → `active`/`failed`) so requests to a not-yet-active tenant get a friendly 503/retry page. Resiliency is non-negotiable: every provisioning job must be idempotent and retryable (re-running `MigrateDatabase` must be safe; `CreateDatabase` should tolerate an existing database), a failed job must mark the tenant failed and trigger cleanup — drop the half-created database, delete the `Tenant` row — or alerting."
+          }
+        },
+        {
+          "key": "central",
+          "kind": "heading",
+          "title": "Central migrations vs tenant migrations"
+        },
+        {
+          "key": "central-text",
+          "kind": "prose",
+          "payload": {
+            "text": "stancl/tenancy separates the two schemas. Central-database schema — the `tenants` table, `domains`, central users — lives in `database/migrations` and runs with the normal `php artisan migrate`. Tenant schema lives in `database/migrations/tenant` and is applied to every tenant database with `php artisan tenants:migrate`, filterable with `--tenants=...`. Because `tenants:migrate` iterates the tenants and boots tenancy per tenant, tenant migrations run outside any request tenant context. Two details interviewers probe: all migrations share one PHP namespace, so central and tenant migration class names must be unique even when they create same-named tables; and tenant migrations also fire automatically for a brand-new tenant — the `MigrateDatabase` job listens on `TenantCreated`, the pipeline at the top of this lesson. The directory paths are configurable through `migration_parameters.paths` in `config/tenancy.php`, and in tests and factories a synchronous `Tenant::create()` bypasses the queues by design."
+          }
+        },
+        {
+          "key": "central-code",
+          "kind": "code",
+          "payload": {
+            "code": "# central schema (tenants, domains, central users):\nphp artisan migrate\n\n# tenant schema, applied to every tenant database:\nphp artisan tenants:migrate\n\n# ... or only the ones you need (backfill / rollout in waves):\nphp artisan tenants:migrate --tenants=abc-123,xyz-789\n\n# seed tenant data after the fact:\nphp artisan tenants:seed",
+            "lang": "bash",
+            "title": "The two migration worlds on the command line"
+          }
+        },
+        {
+          "key": "naming",
+          "kind": "heading",
+          "title": "Naming tenant databases deterministically"
+        },
+        {
+          "key": "naming-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Every database needs a safe, deterministic name, and the module's snippet task implements exactly that: `tenant_db_name(7)` returns `'tenant_000007'` (zero-padded to six digits), `tenant_db_name(12345)` returns `'tenant_012345'`, and ids longer than six digits stay deterministic rather than truncating (`tenant_1234567`). Negative ids are clamped to 0 so the output shape can never change."
+          }
+        },
+        {
+          "key": "naming-code",
+          "kind": "code",
+          "payload": {
+            "code": "function tenant_db_name(int $tenantId): string\n{\n    // A DB name may only hold safe characters, so map the int to a\n    // deterministic zero-padded string; clamping keeps the output stable.\n    $id = max(0, $tenantId);\n\n    return 'tenant_' . str_pad((string) $id, 6, '0', STR_PAD_LEFT);\n}\n\n// tenant_db_name(7)      => 'tenant_000007'\n// tenant_db_name(12345)  => 'tenant_012345'\n// tenant_db_name(0)      => 'tenant_000000'\n// tenant_db_name(1234567)=> 'tenant_1234567'  (no truncation)",
+            "lang": "php",
+            "title": "The reference solution for tenant_db_name"
+          }
+        },
+        {
+          "key": "cutover",
+          "kind": "heading",
+          "title": "Moving pooled tenants out: the hybrid cutover"
+        },
+        {
+          "key": "cutover-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Once the hybrid decision is made (see the models lesson), the move itself is a data-engineering project. For each migrating tenant: provision the empty tenant database, then copy its rows **table by table in a reproducible order** — respecting foreign keys and identity columns — with checksums and counts verified per table. Because the dataset is large, use a staging + cutover approach: continuous or near-continuous replication (or a final incremental sync), a short read-only maintenance window for the last delta, and a reversible switch — a feature flag or per-tenant routing record — so you can fall back to pooled reads instantly. Sequence it: standardise the extraction tooling, pilot on the smallest tenant first, cut over the largest and most sensitive tenant last, and keep the rollback rehearsed."
+          }
+        },
+        {
+          "key": "ops-list",
+          "kind": "prose",
+          "payload": {
+            "text": "- **Migrations become per-tenant** — every schema change must run against the tenant databases too (`php artisan tenants:migrate` with the tenant list), plus central migrations for the shared tables; drift between the pooled schema and migrated tenants' schemas becomes a real risk that needs migration checks.\n- **Reporting breaks** — the CFO query that joined across tenant tables stops working once data spans databases; plan a warehouse, `dblink`/`postgres_fdw` aggregation, or app-level fan-out, and make GDPR deletion flows traverse both stores.\n- **Foreign keys must be redesigned** — cross-database FK constraints do not exist, so references to central or shared tables move into application code or central reference tables.\n- **Jobs and queues become tenant-aware** — a worker that previously ran one central queue must know which tenant's connection to boot before touching data, or fan out per tenant; per-tenant cache/Redis namespaces are required.\n- **Ops multiply** — per-tenant backups and restore drills, monitoring and connection-pool sizing per database, and provisioning automation for new databases."
+          }
+        },
+        {
+          "key": "tip",
+          "kind": "callout",
+          "payload": {
+            "tone": "tip",
+            "text": "The 'pressures' multi-select and the hybrid scenario ask the same question in reverse: the quiz tests whether you can **justify** isolation, the scenario tests whether you can **cost** it. Name the five problems above and you have answered both halves.",
+            "title": "Justify it, then cost it"
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Provisioning and migrations are where database-per-tenant stops being a diagram and becomes an operating burden. The remaining piece — how queue workers and a shared cache keep tenant context when they run outside any request — is the next lesson."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "tenant-aware-queues-cache",
+      "title": "Tenant-aware infrastructure: queue workers, cache and Redis",
+      "summary": "Queue workers and a shared cache have no request lifecycle — nothing re-identifies the tenant when a job runs or a cache key is read. Learn how stancl/tenancy serialises tenant identity into job payloads, why the jobs table must stay central, and how cache keys get tenant namespaces so tenant B can never read tenant A's cached data.",
+      "minutes": 12,
+      "difficulty": "hard",
+      "tags": [
+        "multi-tenancy",
+        "stancl-tenancy",
+        "queues",
+        "tenant-aware-jobs",
+        "cache",
+        "tenant-aware-cache",
+        "laravel",
+        "data-leak",
+        "security",
+        "isolation"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The cache question (one shared Redis, one logical key `settings`) and the queue-bootstrapper question are the same gap: infrastructure that outlives a request has **no middleware and no tenant context**. If nothing re-establishes context, tenant A's cached settings and tenant B's queued job both read whatever the shared store holds — a leak as real as a shared database row. The scenario task makes both part of its 'tenant-aware queues and cache' criterion."
+          }
+        },
+        {
+          "key": "worker",
+          "kind": "heading",
+          "title": "The worker problem"
+        },
+        {
+          "key": "worker-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Queue workers are long-running processes: they pop one job after another and have no HTTP request lifecycle, so nothing re-identifies the tenant when a job runs. A job dispatched inside tenant Alpha's request is just a serialised payload to the worker — unless the payload says who it belongs to."
+          }
+        },
+        {
+          "key": "worker-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "The payload carries the tenant",
+                "text": "A job dispatched inside a booted tenant context has the tenant's identity serialised onto the payload.",
+                "state": "job payload → tenant identity"
+              },
+              {
+                "title": "The bootstrapper boots before handle()",
+                "text": "`QueueTenancyBootstrapper` intercepts handling and initialises tenancy for that tenant before `handle()` runs — so the job sees Alpha's database, cache and filesystem — then tears tenancy down afterwards.",
+                "state": "boot → handle → teardown"
+              },
+              {
+                "title": "Tenant jobs are stored centrally",
+                "text": "The database driver's jobs table must point at the central connection, so a worker attached centrally can pick up any tenant's job and boot it before handling.",
+                "state": "jobs never stranded in tenant DBs"
+              }
+            ],
+            "title": "How stancl/tenancy keeps jobs tenant-aware",
+            "intro": "This is the documented behaviour behind the queue-bootstrapper question."
+          }
+        },
+        {
+          "key": "queue-code",
+          "kind": "code",
+          "payload": {
+            "code": "return [\n    // config/queue.php — the database driver stores jobs CENTRALLY, so a\n    // worker attached to the central connection can pick up jobs for any\n    // tenant and boot that tenant before handling them:\n    'database' => [\n        'driver'     => 'database',\n        'connection' => 'central',     // never a tenant connection\n    ],\n];",
+            "lang": "php",
+            "title": "Where the jobs table lives"
+          }
+        },
+        {
+          "key": "worker-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "Two expert points from the module: if your queue runs on Redis, that Redis connection must **not** be in `tenancy.redis.prefixed_connections`, for the same reason — jobs must not be stranded in tenant-prefixed stores. And never mix central and tenant jobs on one queue connection: leftover bootstrapped state can make a central job believe it is inside the previous tenant's context. Jobs that must always run centrally should use a dedicated queue connection marked `'central' => true`."
+          }
+        },
+        {
+          "key": "cache",
+          "kind": "heading",
+          "title": "The shared cache leak"
+        },
+        {
+          "key": "cache-text",
+          "kind": "prose",
+          "payload": {
+            "text": "A shared cache without tenant partitioning is a cross-tenant leak and a correctness bug: tenant A stores `settings` under the global key, tenant B reads it and sees A's configuration, and **last-writer-wins makes values flicker** between tenants. The fix is deterministic partitioning — namespace the cache by tenant."
+          }
+        },
+        {
+          "key": "cache-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Manual prefix",
+                "text": "`Cache::put('tenant_' . $tenantId . ':settings', $value, 600)` — every key carries the tenant id.",
+                "state": "tenant_42:settings"
+              },
+              {
+                "title": "stancl bootstrappers",
+                "text": "`CacheTenancyBootstrapper` and `RedisTenancyBootstrapper` make the cache and Redis prefixes tenant-specific while tenancy is booted, so standard `Cache::put`/`Cache::get` calls are automatically isolated.",
+                "state": "prefix added automatically"
+              },
+              {
+                "title": "Global data on purpose",
+                "text": "Data that is genuinely global — feature flags, shared reference data — lives in a central, un-prefixed store on purpose; the package exposes central cache helpers and connections for it.",
+                "state": "central keys stay unpolluted"
+              }
+            ],
+            "title": "Two ways to namespace, one rule for global data"
+          }
+        },
+        {
+          "key": "cache-code",
+          "kind": "code",
+          "payload": {
+            "code": "// Manual namespacing (works under any tenancy model):\nCache::put('tenant_' . $tenantId . ':settings', $settings, 600);\n\n// With stancl's CacheTenancyBootstrapper the prefix is added for you\n// while tenancy is booted, so plain calls stay isolated:\nCache::put('settings', $settings, 600);        // stored under the tenant prefix\n\n// Feature flags are NOT tenant data — keep them central and un-prefixed:\nCache::put('flags:vat-v2', true, 86400);       // via the central helpers",
+            "lang": "php",
+            "title": "Namespace tenant data, keep global data central"
+          }
+        },
+        {
+          "key": "cache-prose",
+          "kind": "prose",
+          "payload": {
+            "text": "The worker rule from the jobs half applies here too: a queue worker must have the tenant **booted before touching cache**, otherwise it writes into the wrong namespace — or into the unpolluted central one. Per-tenant Redis logical databases and key prefixes are both acceptable; the requirement is deterministic isolation, not a specific mechanism."
+          }
+        },
+        {
+          "key": "cache-warning",
+          "kind": "callout",
+          "payload": {
+            "tone": "warning",
+            "text": "The debugging scenario calls digests 'prime cache-leak material': if a nightly job caches per-customer summaries under a global key like `digest:user:42`, tenant A's run can overwrite — and then serve — tenant B's data. When auditing, check the key namespaces and whether the cache tenancy bootstrapper was active inside the worker.",
+            "title": "Cache is a leak surface equal to the database"
+          }
+        },
+        {
+          "key": "generic",
+          "kind": "heading",
+          "title": "The package-free pattern the scenario wants"
+        },
+        {
+          "key": "generic-code",
+          "kind": "code",
+          "payload": {
+            "code": "// The generic shape (what the scenario task expects you to describe):\n// 1) tenant_id is serialised onto the job itself:\nclass SendOrderDigest implements ShouldQueue\n{\n    public function __construct(public int $tenantId, public int $userId) {}\n}\n\n// 2) a queue middleware re-resolves and rebinds context before handle():\nclass RestoreTenantContext\n{\n    public function handle($job, $next)\n    {\n        app(TenantContext::class)->set($job->tenantId);\n        return $next($job);\n    }\n}",
+            "lang": "php",
+            "title": "tenant_id on the job + a rebinding middleware"
+          }
+        },
+        {
+          "key": "shared-table",
+          "kind": "table",
+          "payload": {
+            "headers": [
+              "Shared resource",
+              "Leak without partitioning",
+              "The fix"
+            ],
+            "rows": [
+              [
+                "database (pooled)",
+                "an unscoped query reads other tenants' rows",
+                "global scope that fails closed"
+              ],
+              [
+                "queue / jobs",
+                "job runs with leftover or no tenant context",
+                "tenant id on the payload + bootstrapper or middleware"
+              ],
+              [
+                "cache / Redis",
+                "a global key serves the last writer's data",
+                "tenant prefix or tenancy bootstrapper"
+              ],
+              [
+                "session / filesystem",
+                "one tenant's session or files visible to another",
+                "tenant-scoped keys and drivers"
+              ],
+              [
+                "search index",
+                "autocomplete returns every tenant's documents",
+                "store and filter the tenant id in the index"
+              ]
+            ],
+            "title": "Every shared resource needs a tenant boundary",
+            "mono": [
+              0
+            ],
+            "em": [
+              1
+            ]
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Fail-closed scoping, provisioning and migrations, and tenant-aware infrastructure are the reusable skeleton for any multi-tenant answer. The last lesson covers the deepest backstop of all: letting the database enforce isolation itself with Postgres row-level security."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "database-level-isolation",
+      "title": "Postgres row-level security: the backstop Eloquent cannot be",
+      "summary": "Global scopes can only cover the code paths that go through models. Postgres row-level security makes the database itself refuse rows outside the current tenant — covering raw SQL, DB::table() and even other services. Learn the policy mechanics, the session-state and owner-bypass pitfalls, and why RLS is defense in depth, not a replacement for scopes.",
+      "minutes": 10,
+      "difficulty": "hard",
+      "tags": [
+        "multi-tenancy",
+        "row-level-security",
+        "postgres",
+        "data-isolation",
+        "security",
+        "trap",
+        "isolation"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The hardest trap question in the module is about Postgres row-level security: you enabled RLS on top of your Eloquent scopes — and the correct answer is a list of caveats, not a congratulations. The module frames it as **defense in depth, not replacement**, and the debugging scenario names RLS as the 'database-level backstop for raw queries'."
+          }
+        },
+        {
+          "key": "why",
+          "kind": "heading",
+          "title": "Why scopes cannot be the last line"
+        },
+        {
+          "key": "why-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Eloquent global scopes cover Eloquent. They cannot cover `DB::table()`, raw SQL, or queries issued by other services that share the database. Row-level security moves the guarantee into the database itself: every command — SELECT, UPDATE, DELETE, and INSERT via a `WITH CHECK` policy — is filtered by the policy, no matter which code path issued it."
+          }
+        },
+        {
+          "key": "rls-code",
+          "kind": "code",
+          "payload": {
+            "code": "-- Each tenant-owned table gets a policy that compares the session's\n-- tenant setting with the row's tenant_id:\nCREATE POLICY tenant_isolation ON orders\n    USING (tenant_id = current_setting('app.tenant_id')::bigint);\n\n-- INSERTs need the same predicate as a WITH CHECK policy.\nCREATE POLICY tenant_isolation_insert ON orders\n    WITH CHECK (tenant_id = current_setting('app.tenant_id')::bigint);\n\nALTER TABLE orders ENABLE ROW LEVEL SECURITY;\n\n-- The app user usually OWNS the tables (migrations run as it), and the\n-- owner bypasses RLS by default — FORCE closes that hole:\nALTER TABLE orders FORCE ROW LEVEL SECURITY;",
+            "lang": "sql",
+            "title": "Policy, WITH CHECK, ENABLE, FORCE — the full recipe"
+          }
+        },
+        {
+          "key": "key-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The Laravel app sets that setting when handling a request — `current_setting('app.tenant_id')` — and the policy keys off it. If the setting is missing, the predicate compares `tenant_id` to NULL and matches nothing: safe but broken. That asymmetry is where the caveats begin."
+          }
+        },
+        {
+          "key": "pitfalls",
+          "kind": "heading",
+          "title": "The three caveats interviewers probe"
+        },
+        {
+          "key": "pitfall-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Every connection must set the tenant first",
+                "text": "Queue workers, scheduled commands, cron, and API integrations using a separate connection all bypass the middleware that sets the value. A forgotten setting yields **zero rows** (safe but broken); a permissive policy — or an unset variable that matches nothing or everything — can yield **all rows** (a leak).",
+                "state": "zero rows — or everything"
+              },
+              {
+                "title": "Session state survives connection pooling",
+                "text": "A `SET` from tenant A's request can linger on a pooled connection and leak into tenant B's request. Reset it with `SET LOCAL` inside a transaction, or `set_config(..., is_local => true)`.",
+                "state": "SET LOCAL / is_local => true"
+              },
+              {
+                "title": "The table owner bypasses RLS by default",
+                "text": "Migrations usually run as the app user, which owns the tables — so without `ALTER TABLE ... FORCE ROW LEVEL SECURITY` the policies may never fire for the app at all.",
+                "state": "FORCE ROW LEVEL SECURITY"
+              }
+            ],
+            "title": "RLS pitfalls, in the order they bite"
+          }
+        },
+        {
+          "key": "miscon-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Two misconceptions the trap question plants: RLS is not evaluated per database role (you do not need one Postgres role per tenant), and it does not filter only SELECTs — UPDATE and DELETE are covered too. The trap is that all of this is invisible from the application layer, which is why the option about forgotten or lingering session state is the one correct answer."
+          }
+        },
+        {
+          "key": "keep",
+          "kind": "heading",
+          "title": "Keep the global scopes anyway"
+        },
+        {
+          "key": "keep-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Never treat the database layer as a reason to delete the application layer. Global scopes keep behaviour predictable at the application layer, work identically on non-Postgres engines, and are far easier to review than policies spread across dozens of tables — RLS policy maintenance is itself a burden. The layers overlap on purpose: scopes for application predictability, RLS for the raw-SQL and cross-service surface."
+          }
+        },
+        {
+          "key": "stack-table",
+          "kind": "table",
+          "payload": {
+            "headers": [
+              "Layer",
+              "What it stops"
+            ],
+            "rows": [
+              [
+                "global scope",
+                "a forgotten `->where()` in model-based queries"
+              ],
+              [
+                "constraints that include `tenant_id` (composite unique, FKs where the engine allows)",
+                "cross-tenant uniqueness collisions at write time"
+              ],
+              [
+                "scoped validation rule",
+                "`Rule::unique` rejecting values that are valid for this tenant"
+              ],
+              [
+                "row-level security",
+                "`DB::table()`, raw SQL, queries from other services"
+              ],
+              [
+                "integration tests",
+                "proof that tenant A can never read tenant B — including soft-deleted and eager-loaded rows"
+              ]
+            ],
+            "title": "The defense-in-depth stack for a shared schema",
+            "em": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "privacy-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Isolation is also a legal feature. A customer contract may require **physically deleting or legally segregating** data, or keeping it inside a specific jurisdiction; per-tenant databases make those flows concrete — drop or encrypt a whole database — whereas pooled tables need painful, risky row surgery. And once data spans stores, GDPR deletion flows must traverse every database the data reached, which the hybrid scenario makes an explicit design requirement."
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "The RLS quiz answer in one line: it protects the surfaces code cannot — but only if every connection sets the tenant first, pooled session state is reset, and the owner bypass is forced shut; and the Eloquent scopes stay, because defense in depth means never deleting a layer because another one exists."
+          }
+        }
+      ]
+    }
+  ]
+}

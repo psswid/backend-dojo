@@ -1,3 +1,179 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* CodeMirror host: fill the fixed-height container and scroll internally. */
+[data-editor-host] {
+    overflow: hidden;
+}
+
+[data-editor-host] .cm-editor {
+    height: 100%;
+}
+
+[data-editor-host] .cm-editor .cm-scroller {
+    overflow: auto;
+}
+
+/* Inline code spans rendered by App\Support\QuizText. */
+.quiz-code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+    font-size: 0.85em;
+    background: #eef2ff;
+    color: #3730a3;
+    border-radius: 0.25rem;
+    padding: 0.1em 0.3em;
+}
+
+/* ------------------------------------------------------------------ */
+/* Lessons                                                             */
+/* ------------------------------------------------------------------ */
+
+/* Inline code spans and links rendered by App\Support\LessonText. */
+.lesson-code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+    font-size: 0.85em;
+    background: #eef2ff;
+    color: #3730a3;
+    border-radius: 0.25rem;
+    padding: 0.1em 0.35em;
+    white-space: nowrap;
+}
+
+.lesson-link {
+    color: #4f46e5;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+/* Prose blocks produced by LessonText::prose (Tailwind preflight strips lists). */
+.lesson-body p + p {
+    margin-top: 0.4rem;
+}
+
+.lesson-body ul {
+    list-style: disc;
+    padding-left: 1.35rem;
+    margin: 0.1rem 0 0.5rem;
+}
+
+.lesson-body ul li {
+    margin: 0.25rem 0;
+}
+
+/* Diagram building blocks (figure payloads are authored as plain HTML
+   using only the classes below — no Tailwind utilities from content). */
+.lesson-diagram {
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.lesson-diagram .ld-flow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    row-gap: 0.85rem;
+    justify-content: center;
+}
+
+.lesson-diagram .ld-flow-nw {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    justify-content: flex-start;
+    padding-bottom: 0.35rem;
+}
+
+.lesson-diagram .ld-col {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.5rem;
+    min-width: 0;
+}
+
+.lesson-diagram .ld-box {
+    display: block;
+    padding: 0.45rem 0.8rem;
+    border-radius: 0.5rem;
+    border: 1.5px solid #cbd5e1;
+    background: #ffffff;
+    color: #1e293b;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.lesson-diagram .ld-box code,
+.lesson-diagram .ld-box .tag {
+    display: block;
+    font-family: inherit;
+}
+
+.lesson-diagram .ld-box .tag {
+    font-family: Figtree, ui-sans-serif, system-ui, sans-serif;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #64748b;
+    margin-top: 0.1rem;
+    white-space: normal;
+}
+
+.lesson-diagram .ld-a { border-color: #10b981; }
+.lesson-diagram .ld-b { border-color: #6366f1; }
+.lesson-diagram .ld-c { border-color: #f59e0b; }
+.lesson-diagram .ld-r { border-color: #ef4444; }
+.lesson-diagram .ld-dim { background: #f8fafc; color: #94a3b8; }
+
+.lesson-diagram .ld-arrow {
+    align-self: center;
+    padding: 0 0.45rem;
+    color: #94a3b8;
+    font-size: 15px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.lesson-diagram .ld-down {
+    display: flex;
+    justify-content: center;
+    color: #94a3b8;
+    font-size: 15px;
+    line-height: 1;
+}
+
+.lesson-diagram .ld-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    justify-content: center;
+}
+
+.lesson-diagram .ld-note {
+    font-family: Figtree, ui-sans-serif, system-ui, sans-serif;
+    color: #64748b;
+    font-size: 12px;
+}
+
+.lesson-diagram .ld-legend {
+    margin-top: 0.6rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    justify-content: center;
+    font-family: Figtree, ui-sans-serif, system-ui, sans-serif;
+    color: #64748b;
+    font-size: 12px;
+}
+
+.lesson-diagram .ld-legend .sw {
+    display: inline-block;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 0.15rem;
+    border: 1.5px solid;
+    margin-right: 0.25rem;
+    vertical-align: -0.05rem;
+}
+
+

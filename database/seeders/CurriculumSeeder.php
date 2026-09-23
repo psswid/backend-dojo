@@ -2,6 +2,8 @@
 
 namespace Database\Seeders;
 
+use App\Models\Lesson;
+use App\Models\LessonSection;
 use App\Models\Question;
 use App\Models\Resource;
 use App\Models\Topic;
@@ -9,10 +11,12 @@ use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\File;
 
 /**
- * Seeds the curriculum from versioned JSON files in database/seeders/content/*.json.
+ * Seeds the curriculum from versioned JSON files:
+ *   - database/seeders/content/*.json        (topic + questions + resources)
+ *   - database/seeders/content/lessons/*.json (lessons per topic_slug)
  *
- * Content is data, not code — each file is self-contained (topic + questions + resources)
- * and can be regenerated or replaced without touching the seeder.
+ * Content is data, not code — each file is self-contained and can be
+ * regenerated or replaced without touching the seeder.
  */
 class CurriculumSeeder extends Seeder
 {
@@ -31,7 +35,27 @@ class CurriculumSeeder extends Seeder
             $this->seedFile($data);
         }
 
-        $this->command?->info('Curriculum seeded: '.count($files).' topic file(s).');
+        $lessonFiles = File::glob(database_path('seeders/content/lessons/*.json'));
+
+        foreach ($lessonFiles as $file) {
+            $data = json_decode(File::get($file), true);
+
+            if (! is_array($data) || empty($data['topic_slug'])) {
+                $this->command?->warn("Skipping invalid lesson file: {$file}");
+                continue;
+            }
+
+            $topic = Topic::where('slug', $data['topic_slug'])->first();
+
+            if ($topic === null) {
+                $this->command?->warn("Lesson file {$file} references unknown topic '{$data['topic_slug']}' — skipping.");
+                continue;
+            }
+
+            $this->seedLessons($topic, $data['lessons'] ?? []);
+        }
+
+        $this->command?->info('Curriculum seeded: '.count($files).' topic file(s), '.count($lessonFiles).' lesson file(s).');
     }
 
     private function seedFile(array $data): void
@@ -61,6 +85,42 @@ class CurriculumSeeder extends Seeder
 
             foreach ($question['resources'] ?? [] as $resource) {
                 $this->upsertResource($resource, $topic->id, $q->id);
+            }
+        }
+
+        $this->seedLessons($topic, $data['lessons'] ?? []);
+    }
+
+    private function seedLessons(Topic $topic, array $lessons): void
+    {
+        $lessonSort = 0;
+
+        foreach ($lessons as $lesson) {
+            $lessonSort++;
+            $l = Lesson::updateOrCreate(
+                ['topic_id' => $topic->id, 'slug' => $lesson['slug']],
+                [
+                    'title' => $lesson['title'],
+                    'summary' => $lesson['summary'] ?? null,
+                    'minutes' => $lesson['minutes'] ?? null,
+                    'difficulty' => $lesson['difficulty'] ?? 'medium',
+                    'tags' => $lesson['tags'] ?? null,
+                    'sort_order' => $lessonSort,
+                ]
+            );
+
+            $sectionSort = 0;
+            foreach ($lesson['sections'] ?? [] as $section) {
+                $sectionSort++;
+                LessonSection::updateOrCreate(
+                    ['lesson_id' => $l->id, 'key' => $section['key']],
+                    [
+                        'kind' => $section['kind'],
+                        'title' => $section['title'] ?? null,
+                        'payload' => $section['payload'] ?? null,
+                        'sort_order' => $sectionSort,
+                    ]
+                );
             }
         }
     }

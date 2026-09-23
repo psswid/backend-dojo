@@ -34,7 +34,7 @@
     },
     {
       "title": "Martin Fowler — AntiCorruptionLayer",
-      "url": "https://martinfowler.com/bliki/AntiCorruptionLayer.html",
+      "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/anti-corruption-layer",
       "type": "article",
       "summary": "The canonical description of the anti-corruption layer: a translating boundary that keeps a legacy subsystem's model from leaking into a new domain."
     },
@@ -314,7 +314,7 @@
         },
         {
           "title": "Martin Fowler — AntiCorruptionLayer",
-          "url": "https://martinfowler.com/bliki/AntiCorruptionLayer.html",
+          "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/anti-corruption-layer",
           "type": "article",
           "summary": "The boundary pattern that keeps legacy models from leaking into your domain."
         }
@@ -376,7 +376,7 @@
       "resources": [
         {
           "title": "Martin Fowler — AntiCorruptionLayer",
-          "url": "https://martinfowler.com/bliki/AntiCorruptionLayer.html",
+          "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/anti-corruption-layer",
           "type": "article",
           "summary": "The canonical definition and motivation of the anti-corruption layer."
         }

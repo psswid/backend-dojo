@@ -51,6 +51,28 @@
           "A unique idempotency key makes duplicate requests and queue redeliveries harmless"
         ]
       }
+    },
+    {
+      "type": "snippet",
+      "title": "has_conflict: detect a 3-way merge conflict between concurrent edits",
+      "difficulty": "hard",
+      "tags": ["optimistic-locking", "merge", "conflict-detection", "concurrency"],
+      "description": "Implement has_conflict(array $base, array $theirs, array $ours): bool. It models optimistic concurrency: $base is the original state, $theirs and $ours are two concurrent edits of it. It returns true when at least one key was changed by BOTH sides (their value differs from base AND our value differs from base) AND their two new values differ from each other. A key missing from an array is treated as null. Examples: has_conflict(['a' => 1], ['a' => 2], ['a' => 1]) returns false (only 'theirs' changed); has_conflict(['a' => 1], ['a' => 2], ['a' => 2]) returns false (both changed to the same value); has_conflict(['a' => 1], ['a' => 2], ['a' => 3]) returns true; has_conflict([], ['a' => 1], []) returns false (only one side added).",
+      "starter_code": "function has_conflict(array $base, array $theirs, array $ours): bool\n{\n    // your code here\n}",
+      "test_suite": "expect('only theirs changed', has_conflict(['a' => 1], ['a' => 2], ['a' => 1]), false);\nexpect('only ours changed', has_conflict(['a' => 1], ['a' => 1], ['a' => 2]), false);\nexpect('both changed same value', has_conflict(['a' => 1], ['a' => 2], ['a' => 2]), false);\nexpect('both changed different', has_conflict(['a' => 1], ['a' => 2], ['a' => 3]), true);\nexpect('one side added only', has_conflict([], ['a' => 1], []), false);\nexpect('multi-key conflict', has_conflict(['a' => 1, 'b' => 2], ['a' => 2, 'b' => 3], ['a' => 3, 'b' => 4]), true);\nexpect('no conflict on untouched', has_conflict(['a' => 1], ['a' => 1], ['a' => 1]), false);",
+      "solution": "function has_conflict(array $base, array $theirs, array $ours): bool\n{\n    $keys = array_unique(array_merge(array_keys($base), array_keys($theirs), array_keys($ours)));\n\n    foreach ($keys as $k) {\n        $b = $base[$k] ?? null;\n        $t = $theirs[$k] ?? null;\n        $o = $ours[$k] ?? null;\n\n        if ($t !== $b && $o !== $b && $t !== $o) {\n            return true;\n        }\n    }\n\n    return false;\n}",
+      "rubric": null
+    },
+    {
+      "type": "debug",
+      "title": "has_conflict flags same-value edits as conflicts",
+      "difficulty": "medium",
+      "tags": ["optimistic-locking", "merge", "conflict-detection", "debugging"],
+      "description": "has_conflict(array $base, array $theirs, array $ours): bool must return true only when both sides changed the SAME key to DIFFERENT values. The broken version returns true whenever both sides differ from base, so two sides that independently made the SAME change (['a' => 2] vs ['a' => 2]) are wrongly reported as a conflict. Add the missing check that their new values differ from each other. Hint: a conflict needs t !== b AND o !== b AND t !== o.",
+      "starter_code": "function has_conflict(array $base, array $theirs, array $ours): bool\n{\n    $keys = array_unique(array_merge(array_keys($base), array_keys($theirs), array_keys($ours)));\n\n    foreach ($keys as $k) {\n        $b = $base[$k] ?? null;\n        $t = $theirs[$k] ?? null;\n        $o = $ours[$k] ?? null;\n\n        if ($t !== $b && $o !== $b) {\n            return true;\n        }\n    }\n\n    return false;\n}",
+      "test_suite": "expect('both changed same value is not a conflict', has_conflict(['a' => 1], ['a' => 2], ['a' => 2]), false);\nexpect('real conflict detected', has_conflict(['a' => 1], ['a' => 2], ['a' => 3]), true);\nexpect('only theirs changed', has_conflict(['a' => 1], ['a' => 2], ['a' => 1]), false);",
+      "solution": "function has_conflict(array $base, array $theirs, array $ours): bool\n{\n    $keys = array_unique(array_merge(array_keys($base), array_keys($theirs), array_keys($ours)));\n\n    foreach ($keys as $k) {\n        $b = $base[$k] ?? null;\n        $t = $theirs[$k] ?? null;\n        $o = $ours[$k] ?? null;\n\n        if ($t !== $b && $o !== $b && $t !== $o) {\n            return true;\n        }\n    }\n\n    return false;\n}",
+      "rubric": null
     }
   ]
 }

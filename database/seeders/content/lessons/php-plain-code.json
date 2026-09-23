@@ -1,0 +1,1711 @@
+{
+  "topic_slug": "php-plain-code",
+  "lessons": [
+    {
+      "slug": "loose-vs-strict",
+      "title": "Type juggling: loose == vs strict ===",
+      "summary": "The two comparison operators answer different questions. This lesson rebuilds the falsy table, the PHP 8 numeric-string change and the famous null/'0'/'' asymmetry from first principles — so you can predict == results instead of memorising a matrix.",
+      "minutes": 8,
+      "difficulty": "easy",
+      "tags": [
+        "type-juggling",
+        "comparison",
+        "loose-vs-strict",
+        "null",
+        "php8",
+        "edge-cases"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Interviewers love loose-vs-strict questions not because `==` is exotic, but because real codebases ship silent bugs when an id, a flag or an input that can legitimately be `0`, `'0'`, `''`, `null` or `false` is compared loosely. If you can explain **why** each result happens, you can answer any variant on the spot. The two quiz questions in this module test exactly this."
+          }
+        },
+        {
+          "key": "equal",
+          "kind": "heading",
+          "title": "What the two operators actually ask"
+        },
+        {
+          "key": "equal-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`===` (strict) asks: *same value **and** same type?* It never converts anything — an `int` and a `string` can never be `===`.\n\n`==` (loose) asks: *same value after coercing one side to the other's type?* The coercion rules depend on the operand types, and they contain asymmetries that look like bugs. The practical rule most senior codebases follow: **use `===` by default and reach for `==` only when you deliberately want a numeric string (`'007'`, `'1e3'`) to be treated as a number.**"
+          }
+        },
+        {
+          "key": "table",
+          "kind": "heading",
+          "title": "The 'empty-ish' values and their web of == relations"
+        },
+        {
+          "key": "table-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The dangerous cluster is the group of values that all *feel* empty. Each column below was verified on PHP 8. `== null` and `== 0` are NOT the same test:"
+          }
+        },
+        {
+          "key": "table-main",
+          "kind": "table",
+          "payload": {
+            "title": "Four empty-ish values under loose comparison (PHP 8)",
+            "headers": [
+              "Value",
+              "Falsy?",
+              "== null",
+              "== 0",
+              "=== ''"
+            ],
+            "rows": [
+              [
+                "`null`",
+                "yes",
+                "true",
+                "true",
+                "false"
+              ],
+              [
+                "`0` (int)",
+                "yes",
+                "true",
+                "true",
+                "false"
+              ],
+              [
+                "`'0'` (string)",
+                "yes",
+                "**false**",
+                "true",
+                "false"
+              ],
+              [
+                "`''` (string)",
+                "yes",
+                "true",
+                "**false**",
+                "true"
+              ],
+              [
+                "`false`",
+                "yes",
+                "true",
+                "true",
+                "false"
+              ]
+            ],
+            "note": "Rows marked **bold** are the traps: `'0'` is falsy yet NOT `== null`, and `''` is `== null` but NOT `== 0` on PHP 8.",
+            "mono": [
+              0
+            ],
+            "em": [
+              2,
+              3,
+              4
+            ]
+          }
+        },
+        {
+          "key": "watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "If you test user input or a lookup result with `if ($value == null)` you silently **miss the string `'0'`** — a perfectly plausible value (a zero id, a 'no' flag). `filter_input()` and query params routinely hand you `''`, `null`, `'0'` and `false` for the same logical field. Handle them explicitly: `if ($value === null || $value === '')`.",
+            "title": "`== null` is not an 'is empty' check"
+          }
+        },
+        {
+          "key": "walk",
+          "kind": "heading",
+          "title": "Walking the two canonical expressions"
+        },
+        {
+          "key": "walk-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Start: `0 == '0'`",
+                "text": "Left side is `int 0`, right side is the string `'0'`. Loose comparison between a number and a **numeric string** converts the string to a number first.",
+                "state": "0 == (int) '0'"
+              },
+              {
+                "title": "Both sides are now ints",
+                "text": "`'0'` coerces to `0`, so the expression becomes `0 == 0`.",
+                "state": "0 == 0"
+              },
+              {
+                "title": "Verdict for `==`",
+                "text": "Equal values, equal ints → `true`.",
+                "state": "true"
+              },
+              {
+                "title": "Now `0 === '0'`",
+                "text": "Strict comparison checks the **type** before anything else: `int` vs `string`. Types differ, so the answer is `false` without any value conversion.",
+                "state": "false"
+              }
+            ],
+            "title": "Expression 1: 0 == '0'  and  0 === '0'"
+          }
+        },
+        {
+          "key": "php8",
+          "kind": "heading",
+          "title": "What PHP 8 changed in string-vs-number comparisons"
+        },
+        {
+          "key": "php8-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Before PHP 8, a **non-numeric** string compared loosely to a number was treated as `0` — so `0 == 'abc'` was `true`, a legendary source of bugs. Since PHP 8, only **numeric strings** coerce to numbers; any other string stays a string and the number is converted to a string for the comparison instead."
+          }
+        },
+        {
+          "key": "php8-table",
+          "kind": "table",
+          "payload": {
+            "title": "Before vs after (same code, different results)",
+            "headers": [
+              "Expression",
+              "PHP 7",
+              "PHP 8",
+              "Why on PHP 8"
+            ],
+            "rows": [
+              [
+                "`0 == 'abc'`",
+                "true",
+                "false",
+                "'abc' is not numeric → compared as string '0' vs 'abc'"
+              ],
+              [
+                "`0 == '0'`",
+                "true",
+                "true",
+                "'0' is a numeric string → coerces to int 0"
+              ],
+              [
+                "`0 == '1e3'`",
+                "true",
+                "true",
+                "'1e3' is a numeric string → 1000"
+              ],
+              [
+                "`0 == '0x1A'`",
+                "true",
+                "false",
+                "hex strings stopped being numeric in PHP 8"
+              ]
+            ],
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "null-map",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-flow\">\n  <div class=\"ld-col\"><span class=\"ld-box ld-a\">null</span><span class=\"ld-down\">&#8595;</span><span class=\"ld-box ld-a\">true</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-a\">0 &nbsp;<span class=\"tag\">int</span></span><span class=\"ld-down\">&#8595;</span><span class=\"ld-box ld-a\">true</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-a\">''</span><span class=\"ld-down\">&#8595;</span><span class=\"ld-box ld-a\">true</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-r\">'0'</span><span class=\"ld-down\">&#8595;</span><span class=\"ld-box ld-r\">false</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-a\">false</span><span class=\"ld-down\">&#8595;</span><span class=\"ld-box ld-a\">true</span></div>\n</div>",
+            "title": "The asymmetry at a glance: what is loosely equal to null",
+            "caption": "`'0'` is the only falsy value in the group that is NOT loosely equal to null — `'' == null` is true, `'0' == null` is false."
+          }
+        },
+        {
+          "key": "tip",
+          "kind": "callout",
+          "payload": {
+            "tone": "tip",
+            "text": "Write comparisons against a **known type**: validate/convert input first (the module's `safe_int` task exists for this), then use `===`. When you genuinely must accept several representations, enumerate them: `in_array($v, [null, '', '0'], true)`. Never write `== null`, `== 0`, `== false` or `== ''` as 'is empty' checks.",
+            "title": "Compare like a type system, not like a truth table"
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Want the feeling of the trap in code? Try the `safe_int` drill in this module — it is the production-grade answer to '(int) $anything', and the debug sibling shows exactly how a loose cast eats `'abc'` or `null`."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "regex-workbench",
+      "title": "Regex in PHP without the guesswork",
+      "summary": "preg_match does not return a boolean. Learn the 1 / 0 / false contract, how $matches is shaped by capture groups, and when to reach for preg_match_all, preg_replace or plain str_contains instead.",
+      "minutes": 8,
+      "difficulty": "medium",
+      "tags": [
+        "regex",
+        "preg_match",
+        "preg_match_all",
+        "return-values",
+        "strings",
+        "pattern"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The quiz question 'what does `preg_match` return' is a filter question: people who used `if (preg_match(...))` their whole career usually cannot answer it precisely. Once the return contract and the `$matches` layout are automatic, regex tasks like `extract_emails` and `normalize_phone` stop being guesswork."
+          }
+        },
+        {
+          "key": "contract",
+          "kind": "heading",
+          "title": "The preg_match return contract"
+        },
+        {
+          "key": "contract-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Pattern matched",
+                "text": "Returns the **integer 1**, stops after the first match, fills `$matches[0]` with the whole matched substring.",
+                "state": "return 1"
+              },
+              {
+                "title": "No match found",
+                "text": "Returns the **integer 0**; `$matches` is untouched (or emptied).",
+                "state": "return 0"
+              },
+              {
+                "title": "Pattern is invalid",
+                "text": "Returns **`false`** and raises a warning — e.g. an unterminated group or character class.",
+                "state": "return false"
+              }
+            ],
+            "intro": "Three outcomes, three distinct values. This is why truthiness tests hide bugs:"
+          }
+        },
+        {
+          "key": "contract-code",
+          "kind": "code",
+          "payload": {
+            "code": "$matched = preg_match('/^[0-9]{9}$/', '600123456');\n$noMatch = preg_match('/^[0-9]{9}$/', '600 123 456');\n$invalid = preg_match('/[unterminated/', 'x');\n\nvar_dump($matched);  // int(1)\nvar_dump($noMatch);  // int(0)\nvar_dump($invalid);  // bool(false) + a warning",
+            "title": "The three return values",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "`1 == true` and `0 == true` are both fine, but `false == true` is also fine — so `if (preg_match(...) == true)` can never detect the **pattern-error** case. Branch on the exact value: `=== 1` matched, `=== 0` no match, `=== false` bad pattern.",
+            "title": "Check === 1 / === 0 / === false"
+          }
+        },
+        {
+          "key": "matches",
+          "kind": "heading",
+          "title": "How $matches is shaped"
+        },
+        {
+          "key": "matches-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`$matches[0]` is always the **full** match. Parenthesised groups follow as `[1]`, `[2]`, … in left-to-right order; named groups `(?P<name>...)` are also exposed under their name. Two traps: a group that did not participate is an empty string, and the match does **not** have to start at position 0 — the engine finds the earliest position where the whole pattern matches."
+          }
+        },
+        {
+          "key": "matches-code",
+          "kind": "code",
+          "payload": {
+            "code": "preg_match('/(\\w+)@([a-z0-9.-]+)/', 'jan.kowalski@example.com', $m);\n// $m[0] = 'kowalski@example.com'   <- the full match\n// $m[1] = 'kowalski'               <- group 1 (\\w+ stops at the dot!)\n// $m[2] = 'example.com'            <- group 2\n\npreg_match('/^(?<local>[^@]+)@(?<domain>[^@]+)$/', 'jan.kowalski@example.com', $n);\n// $n['local']  = 'jan.kowalski'\n// $n['domain'] = 'example.com'",
+            "title": "Group layout — and why the first one skips 'jan.'",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "matches-note",
+          "kind": "prose",
+          "payload": {
+            "text": "The first pattern cannot match `jan` because `\\w` does not include the dot, and the engine will not start the match in the middle of what could be a full match — it starts as early as possible, which is at `kowalski`. If you want the whole address, anchor with `^...$` and use `[^@]+` (anything but `@`) as the task solutions do."
+          }
+        },
+        {
+          "key": "pick",
+          "kind": "heading",
+          "title": "Which tool when"
+        },
+        {
+          "key": "pick-table",
+          "kind": "table",
+          "payload": {
+            "title": "Choosing between the string/regex tools",
+            "headers": [
+              "Need",
+              "Tool",
+              "Returns",
+              "Notes"
+            ],
+            "rows": [
+              [
+                "First match only, boolean-ish answer",
+                "`preg_match`",
+                "1 / 0 / false",
+                "Stops at first match"
+              ],
+              [
+                "Every occurrence",
+                "`preg_match_all`",
+                "int count",
+                "`$matches[0]` = array of all full matches"
+              ],
+              [
+                "Literal substring, no regex",
+                "`str_contains` / `str_starts_with`",
+                "bool",
+                "PHP 8; fastest, no escaping"
+              ],
+              [
+                "Find and replace",
+                "`preg_replace` / `str_replace`",
+                "string",
+                "preg_* for patterns, str_* for literals"
+              ],
+              [
+                "Split on a pattern",
+                "`preg_split`",
+                "array",
+                "e.g. split a CSV-ish line"
+              ]
+            ],
+            "mono": [
+              1
+            ]
+          }
+        },
+        {
+          "key": "validate",
+          "kind": "heading",
+          "title": "Validate, don't search — anchors change everything"
+        },
+        {
+          "key": "validate-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "The shape check first",
+                "text": "`'/^[0-9]{9}$/'` means: nine digits **and nothing else** — the `^` and `$` anchors pin the pattern to the whole string. Without anchors, `preg_match('/[0-9]{9}/', 'x600123456y')` returns 1 (it finds nine digits *inside*).",
+                "state": "'600123456' ok, 'a600123456' rejected"
+              },
+              {
+                "title": "Normalise before validating",
+                "text": "Real phone input contains spaces, dashes and parentheses. Strip them with a character class `'/[\\s\\-().]/'` first, then run the anchored shape check. That two-stage order (clean → validate) is the entire `normalize_phone` task.",
+                "state": "'+48 600-123-456' → '600123456' → '+48 600123456'"
+              },
+              {
+                "title": "Reject, don't coerce",
+                "text": "For identifiers, return `false`/`null` when the shape does not match — never try to 'fix' it by casting. Digits that fail the format are data errors, not numbers to salvage.",
+                "state": "invalid input → null/false"
+              }
+            ],
+            "title": "The normalise-then-validate pipeline"
+          }
+        },
+        {
+          "key": "extract",
+          "kind": "heading",
+          "title": "Collecting every match"
+        },
+        {
+          "key": "extract-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "preg_match_all fills an array of arrays",
+                "text": "`$matches[0]` holds **all** full matches; each capture group gets its own array under `[1]`, `[2]`, …. That is why email extraction uses it instead of a `preg_match` loop.",
+                "state": "$matches[0] = [a@b.pl, x@y.io, ...]"
+              },
+              {
+                "title": "Deduplicate with strict in_array",
+                "text": "`preg_match_all` happily reports duplicates. Keep a `$seen` list and append only addresses not already present — using `in_array(..., true)` so `'0'`-style strings are never confused.",
+                "state": "unique addresses only"
+              }
+            ],
+            "title": "extract_emails in two moves"
+          }
+        },
+        {
+          "key": "extract-code",
+          "kind": "code",
+          "payload": {
+            "code": "preg_match_all('/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/', $text, $matches);\n\n$result = [];\nforeach ($matches[0] as $email) {\n    if (! in_array($email, $result, true)) {\n        $result[] = $email;\n    }\n}",
+            "title": "The extract_emails reference shape",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "tip",
+          "kind": "callout",
+          "payload": {
+            "tone": "tip",
+            "text": "A pattern is a quoted string: `/pattern/` — the first unescaped `/` **ends** the delimiter, so a literal slash inside must be escaped (`\\/`) or you switch delimiter (`'#https?://#'`). To match a metacharacter literally (`. * + ? ( ) [ ] { } | ^ $ \\`), escape it, or build the literal part with `preg_quote($string, '/')`. When in doubt: `preg_quote` first, regex second.",
+            "title": "The boring 20% that causes most pattern errors"
+          }
+        }
+      ]
+    },
+    {
+      "slug": "string-pipelines",
+      "title": "String pipelines: slugify, phone numbers, masking",
+      "summary": "Most plain-PHP string tasks are transformation pipelines: several small stages applied in the right order. Learn why transliteration must use strtr, then walk slugify and phone normalisation stage by stage, watching the string change state.",
+      "minutes": 10,
+      "difficulty": "medium",
+      "tags": [
+        "strings",
+        "strtr",
+        "str_replace",
+        "transliteration",
+        "slug",
+        "regex",
+        "phone",
+        "masking",
+        "substr"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Slugify, phone normalisation and masking look unrelated, but they share one skeleton: **input → stage 1 → stage 2 → … → output**, where every stage is a single, testable transformation. Solve them by deciding the stage order first, then writing one line per stage — and verify the string's state after each stage, exactly like the step tables below."
+          }
+        },
+        {
+          "key": "strtr",
+          "kind": "heading",
+          "title": "strtr vs str_replace: single pass vs sequential"
+        },
+        {
+          "key": "strtr-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`str_replace` applies its replacements **sequentially to the result**, so a later rule can re-translate what an earlier rule just produced. `strtr($s, $map)` with an associative array scans each character **once** (longest keys first) and never re-reads its own output. Transliteration **must** be single-pass — that is the whole point of the strtr quiz question."
+          }
+        },
+        {
+          "key": "strtr-table",
+          "kind": "table",
+          "payload": {
+            "title": "One input, two outcomes",
+            "headers": [
+              "Step",
+              "strtr($s, ['ą'→'a', 'a'→'A'])",
+              "str_replace(['ą','a'], ['a','A'], $s)"
+            ],
+            "rows": [
+              [
+                "Rule 1: 'ą' → 'a'",
+                "`ą` becomes `a` (done — never rescanned)",
+                "`ą` becomes `a`"
+              ],
+              [
+                "Rule 2: 'a' → 'A'",
+                "the fresh `a` is NOT touched again",
+                "**the fresh `a` IS rewritten** to `A`"
+              ],
+              [
+                "Final",
+                "`a`",
+                "`A` ← the bug"
+              ]
+            ],
+            "mono": [
+              1,
+              2
+            ],
+            "em": [
+              2
+            ]
+          }
+        },
+        {
+          "key": "watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "Your transliteration map maps `ż → z` and also handles other letters. If you used `str_replace` with two arrays, a later rule that touches `z` (or a second pass that lowercases and re-applies) would silently rewrite your freshly produced `z`. `strtr` guarantees each input character is translated exactly once.",
+            "title": "Already-replaced output gets re-replaced"
+          }
+        },
+        {
+          "key": "pipeline",
+          "kind": "heading",
+          "title": "The slugify pipeline, stage by stage"
+        },
+        {
+          "key": "slug-flow",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-flow ld-flow-nw\">\n  <div class=\"ld-col\"><span class=\"ld-box ld-a\">'Zażółć gęślą jaźń!'<span class=\"tag\">raw title</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box\">strtr($map)<span class=\"tag\">transliterate</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box\">strtolower<span class=\"tag\">lowercase</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-c\">preg_replace<span class=\"tag\">collapse junk</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-b\">trim('-')<span class=\"tag\">edges</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-a\">'zasolc-gesla-jazn'<span class=\"tag\">slug</span></span></div>\n</div>",
+            "title": "Four stages, one purpose each"
+          }
+        },
+        {
+          "key": "slug-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Stage 1 — transliterate",
+                "text": "`strtr($title, $map)` replaces Polish letters with ASCII equivalents in one single pass (`ż→z`, `ź→z`, `ą→a`, …). Every non-ASCII character must have an entry, including uppercase ones.",
+                "state": "'Zazolc gesla jazn!'"
+              },
+              {
+                "title": "Stage 2 — lowercase",
+                "text": "`strtolower()` — by now the string is pure ASCII, so byte-wise lowercasing is safe (no `mb_strtolower` needed in the dojo sandbox).",
+                "state": "'zazolc gesla jazn!'"
+              },
+              {
+                "title": "Stage 3 — collapse junk to one separator",
+                "text": "`preg_replace('/[^a-z0-9]+/', '-', ...)` turns any run of 'not a lowercase letter or digit' — spaces, punctuation, multiple separators — into a single dash. The `+` is what merges `' -  '` into one dash.",
+                "state": "'zazolc-gesla-jazn-'"
+              },
+              {
+                "title": "Stage 4 — trim the edges",
+                "text": "Input that starts or ends with junk leaves a leading/trailing dash (see the state above). `trim($slug, '-')` removes only edge dashes — this is exactly what the *'slugify leaves leading/trailing dashes'* debug task plants a bug in.",
+                "state": "'zazolc-gesla-jazn'"
+              }
+            ],
+            "title": "slugify('Zażółć gęślą jaźń!')",
+            "intro": "Each stage is one line. Watch the state column — if a stage does not produce the shown state, that stage (not the next one) has the bug."
+          }
+        },
+        {
+          "key": "slug-code",
+          "kind": "code",
+          "payload": {
+            "code": "function slugify(string $title): string\n{\n    $map = [\n        'ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n',\n        'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z',\n        'Ą' => 'a', 'Ć' => 'c', 'Ę' => 'e', 'Ł' => 'l', 'Ń' => 'n',\n        'Ó' => 'o', 'Ś' => 's', 'Ź' => 'z', 'Ż' => 'z',\n    ];\n\n    $title = strtr($title, $map);          // 1. transliterate\n    $title = strtolower($title);           // 2. lowercase (now ASCII)\n    $title = preg_replace('/[^a-z0-9]+/', '-', $title); // 3. collapse\n    return trim($title, '-');              // 4. trim edges\n}",
+            "title": "Reference implementation",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "phone",
+          "kind": "heading",
+          "title": "The same skeleton: normalise_phone"
+        },
+        {
+          "key": "phone-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Strip all separators",
+                "text": "`preg_replace('/[\\s\\-().]/', '', $phone)` removes spaces, dashes, dots and parentheses in one pass (a character class, not three `str_replace` calls). The debug variant that only strips spaces fails here.",
+                "state": "'+48 600-123-456' → '+48600123456'"
+              },
+              {
+                "title": "Remove the country prefix",
+                "text": "Strip `+48` (3 chars), or `0048` (4 chars), or a bare `48` only when the remainder is 9 digits — check `str_starts_with` in that exact order.",
+                "state": "'600123456'"
+              },
+              {
+                "title": "Shape-check with anchors",
+                "text": "`'/^[0-9]{9}$/'` — exactly nine digits. Anything else returns `null` (the 'reject, don't coerce' rule from the regex lesson).",
+                "state": "valid → '+48 600123456'"
+              }
+            ],
+            "title": "normalise_phone('+48 600-123-456')"
+          }
+        },
+        {
+          "key": "mask",
+          "kind": "heading",
+          "title": "Masking: locate the structure, then rebuild"
+        },
+        {
+          "key": "mask-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`mask_email` is the least 'pipeline' of the three but the same discipline applies: find the structural point (`strpos($email, '@')`), split the string, transform the part you must hide, and concatenate. Byte-string operations (`substr`, `strlen`, `str_repeat`) are all you need for ASCII emails."
+          }
+        },
+        {
+          "key": "mask-code",
+          "kind": "code",
+          "payload": {
+            "code": "$email = 'jan.kowalski@example.com';\n$at = strpos($email, '@');                       // 12 — the separator\n\n$local  = substr($email, 0, $at);                // 'jan.kowalski'\n$domain = substr($email, $at);                   // '@example.com'\n$len    = strlen($local);                        // 12\n\n$masked = $local[0] . str_repeat('*', $len - 2) . $local[$len - 1] . $domain;\n// 'j**********i@example.com'   (first + last char of the local part kept)",
+            "title": "Mask the middle of the local part",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "tip",
+          "kind": "callout",
+          "payload": {
+            "tone": "tip",
+            "text": "Every string task in this module has planted edge cases: empty input, `''` (should return `''`, not `null`), a 1-2 character local part (should not crash on `$local[$len-1]`), a missing `@` (return the input unchanged). When an interviewer asks 'what else do you test?', rattle these off — it is half the score.",
+            "title": "Empty strings and short inputs are the hidden tests"
+          }
+        }
+      ]
+    },
+    {
+      "slug": "bytes-and-hex",
+      "title": "Bytes and hex: encoding strings the way PHP sees them",
+      "summary": "hex conversion is byte-level: every byte (0–255) becomes exactly two hex digits. Learn to reason about strings as byte arrays, and why the naive dechex loop drops the leading zero.",
+      "minutes": 6,
+      "difficulty": "easy",
+      "tags": [
+        "strings",
+        "encoding",
+        "hex",
+        "bin2hex",
+        "hex2bin",
+        "validation",
+        "padding",
+        "debugging"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The two hex tasks look trivial — and then the debug variants fail half the people who try them. The reason is almost always the same: thinking of a string as 'characters' instead of as a sequence of bytes. This lesson makes the byte view automatic."
+          }
+        },
+        {
+          "key": "bytes",
+          "kind": "heading",
+          "title": "A string is an array of bytes"
+        },
+        {
+          "key": "bytes-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Every PHP string is a byte sequence. A byte holds 0–255, and hex writes it as exactly **two** digits: `0x0A` → `'0a'`, `0x41` → `'41'`, `0xFF` → `'ff'`. Encoding to hex means: for each byte, emit its two-digit lowercase hex. Decoding is the inverse: pair up digits, each pair becomes one byte."
+          }
+        },
+        {
+          "key": "bytes-table",
+          "kind": "table",
+          "payload": {
+            "title": "From character to hex digits",
+            "headers": [
+              "Input char",
+              "Byte (decimal)",
+              "Byte (hex)",
+              "Encoded"
+            ],
+            "rows": [
+              [
+                "`'A'`",
+                "65",
+                "0x41",
+                "`41`"
+              ],
+              [
+                "`'1'`",
+                "49",
+                "0x31",
+                "`31`"
+              ],
+              [
+                "`'!'`",
+                "33",
+                "0x21",
+                "`21`"
+              ],
+              [
+                "newline `chr(10)`",
+                "10",
+                "0x0A",
+                "`0a`  ← needs the pad!"
+              ],
+              [
+                "`chr(0)`",
+                "0",
+                "0x00",
+                "`00`"
+              ],
+              [
+                "`'ą'` (UTF-8)",
+                "196 133",
+                "0xC4 0x85",
+                "`c485`  ← two bytes"
+              ]
+            ],
+            "mono": [
+              3
+            ],
+            "em": [
+              3
+            ]
+          }
+        },
+        {
+          "key": "encode-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Take the bytes",
+                "text": "`'A1!'` is the three bytes `0x41`, `0x31`, `0x21` — nothing more.",
+                "state": "[0x41, 0x31, 0x21]"
+              },
+              {
+                "title": "Each byte → two hex digits",
+                "text": "`0x41 → '41'`, `0x31 → '31'`, `0x21 → '21'`. Concatenate in order.",
+                "state": "'41' . '31' . '21'"
+              },
+              {
+                "title": "Result",
+                "text": "`bin2hex('A1!')` gives exactly this — it is the whole solution.",
+                "state": "'413121'"
+              }
+            ],
+            "title": "Encoding 'A1!' by hand"
+          }
+        },
+        {
+          "key": "encode-code",
+          "kind": "code",
+          "payload": {
+            "code": "function str_to_hex(string $s): string\n{\n    return bin2hex($s);        // one call, binary-safe, always pads\n}",
+            "title": "The reference solution is one line",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "pad",
+          "kind": "heading",
+          "title": "Where the naive loop breaks"
+        },
+        {
+          "key": "pad-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "The dechex trap",
+                "text": "A hand-rolled loop with `dechex(ord($s[$i]))` produces **one** digit for bytes under 16: `chr(10)` → `dechex(10)` → `'a'` instead of `'0a'`. The output silently changes length.",
+                "state": "wrong: '...a...'  correct: '...0a...'"
+              },
+              {
+                "title": "Why padding matters",
+                "text": "Hex pairs are the unit of decoding. If an encoder ever emits a single digit, the stream is no longer parseable — the next decoder pairs digits from the wrong position. This is the planted bug in the *'str_to_hex loses the leading zero'* debug task.",
+                "state": "'0a' ↔ decode-safe, 'a' ↔ broken"
+              },
+              {
+                "title": "The fix",
+                "text": "Never hand-roll the loop. Use `bin2hex()`; if you must format manually, pad: `sprintf('%02x', ord($byte))`.",
+                "state": "bin2hex or %02x"
+              }
+            ],
+            "title": "The leading-zero bug, step by step"
+          }
+        },
+        {
+          "key": "decode",
+          "kind": "heading",
+          "title": "Decoding with validation"
+        },
+        {
+          "key": "decode-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "hex2bin pairs the digits",
+                "text": "`hex2bin('616263')` → `'abc'`. One pair, one byte.",
+                "state": "'616263' → 'abc'"
+              },
+              {
+                "title": "Malformed input fails loudly",
+                "text": "Odd length (`'6'`) or non-hex characters (`'zz'`) make `hex2bin` return **`false`** with a warning. An empty string decodes to `''` cleanly — but only if you did not pre-check with a pattern that rejects empty.",
+                "state": "false + warning on bad input"
+              },
+              {
+                "title": "Validate before you decode",
+                "text": "Check `/^[0-9a-f]*$/` and an even length first, then decode; treat `false` as invalid input, never as a value. Note the asymmetry: `bin2hex('') === ''` (empty is a valid encoding).",
+                "state": "empty → '' (valid); odd/non-hex → null"
+              }
+            ],
+            "title": "Decoding 'abc' and its failure modes"
+          }
+        },
+        {
+          "key": "watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "The *'hex_to_str returns null for the empty string'* debug task plants exactly this: a guard like `if ($s === '') return null;` is wrong, because `''` is a perfectly valid hex string that should decode to `''`. Only genuinely malformed input (odd length, non-hex) deserves `null`.",
+            "title": "'' is valid hex"
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Interview echo: when they ask 'how do you store binary in a text column / URL?', the answer starts with 'encode each byte as two hex digits…' — and the pad rule is the detail that separates people who have shipped it from people who read about it."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "checksum-validators",
+      "title": "Checksum validators: Luhn, ISBN, PESEL, NIP",
+      "summary": "Four real-world validators, one recipe: sanitise → shape-check → weighted sum → compare the check digit. Walk Luhn, ISBN-10/13, PESEL and NIP digit by digit with the running totals, so the algorithms become something you can rebuild, not recite.",
+      "minutes": 12,
+      "difficulty": "hard",
+      "tags": [
+        "validation",
+        "checksum",
+        "luhn",
+        "isbn",
+        "pesel",
+        "nip",
+        "strings",
+        "digits"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The dojo has six checksum tasks (ISBN-10, ISBN-13, ISBN dispatch, PESEL, NIP, Luhn) plus debug twins that plant wrong weights or wrong parity. They all follow the same skeleton, and none of them is about 'remembering weights' — it is about knowing **where the weights come from** so you can re-derive them."
+          }
+        },
+        {
+          "key": "recipe",
+          "kind": "heading",
+          "title": "The recipe every checksum follows"
+        },
+        {
+          "key": "recipe-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Sanitise",
+                "text": "Strip the separators humans add: spaces and dashes (`'/[\\s-]/'`). Checksums are defined on the bare digit string.",
+                "state": "'123-456-32-18' → '1234563218'"
+              },
+              {
+                "title": "Shape-check",
+                "text": "Exact length + digits-only, with `^` `$` anchors. `'/^[0-9]{11}$/'` for PESEL, `'/^[0-9]{9}[0-9X]$/'` for ISBN-10, etc. Wrong shape → `false`, immediately.",
+                "state": "length/digits verified"
+              },
+              {
+                "title": "Weighted sum",
+                "text": "Multiply each digit by its positional weight and add the products. The weights are the *only* thing that differs between algorithms.",
+                "state": "$sum"
+              },
+              {
+                "title": "Derive the check digit and compare",
+                "text": "Compute what the last digit *should* be from the sum, then compare with the actual last digit. If they differ, the number is invalid.",
+                "state": "checkDigit === last digit ?"
+              }
+            ],
+            "title": "The universal skeleton",
+            "intro": "Every validator below is this skeleton with different weights. Debug a validator by checking each stage against a known-valid example — that is how the planted wrong-weight bugs in this module are found."
+          }
+        },
+        {
+          "key": "luhn",
+          "kind": "heading",
+          "title": "Luhn: double every second digit from the right"
+        },
+        {
+          "key": "luhn-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Used by card numbers. Count from the **rightmost** digit: double every second digit; if doubling makes it ≥ 10, subtract 9 (same as adding the two digits); sum everything; valid if the total ends in 0. 'From the right' is the whole difficulty — a left-to-right implementation only works for odd lengths, which is exactly the planted bug in the *'doubles the wrong digits for even-length numbers'* debug task."
+          }
+        },
+        {
+          "key": "luhn-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Write the digits with parity from the right",
+                "text": "For `79927398713` (11 digits) the rightmost digit `3` is NOT doubled, then alternately: the pattern from the left is *single, double, single, double…* because the length is odd.",
+                "state": "digits:  7 9 9 2 7 3 9 8 7 1 3\npattern: s D s D s D s D s D s"
+              },
+              {
+                "title": "Apply double-and-subtract-9",
+                "text": "Doubled digits: `9→9` (18−9), `2→4`, `3→6`, `8→7` (16−9), `1→2`. Singles stay. Add every term:",
+                "state": "7+9+9+4+7+6+9+7+7+2+3"
+              },
+              {
+                "title": "Total and verdict",
+                "text": "The running total is **70**, and `70 % 10 === 0` → valid.",
+                "state": "sum = 70 → valid"
+              }
+            ],
+            "title": "Luhn on the canonical example 79927398713"
+          }
+        },
+        {
+          "key": "luhn-code",
+          "kind": "code",
+          "payload": {
+            "code": "function luhn_check(string $number): bool\n{\n    $number = preg_replace('/[\\s-]/', '', $number);\n    if (! preg_match('/^[0-9]{2,}$/', $number)) {\n        return false;\n    }\n\n    $sum = 0;\n    $len = strlen($number);\n    for ($i = 0; $i < $len; $i++) {\n        $d = (int) $number[$i];\n        if (($len - $i) % 2 === 0) {   // distance-from-the-right is even → double\n            $d *= 2;\n            if ($d > 9) {\n                $d -= 9;\n            }\n        }\n        $sum += $d;\n    }\n\n    return $sum % 10 === 0;\n}",
+            "title": "Reference — the parity is computed from the total length, not the loop index",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "For the 16-digit `4417123456789113`, the rightmost digit is again not doubled, so from the left the pattern is **double, single, double, single…** — the opposite of the 11-digit case. A loop that doubles `$i % 2 === 1` only works for one parity; the reference above derives the parity from `$len - $i`, which is length-agnostic. Both numbers are valid Luhn numbers: `4417123456789113` doubles 4,1,1,3,5,7,9,1.",
+            "title": "Parity depends on the length, not on your mood"
+          }
+        },
+        {
+          "key": "isbn",
+          "kind": "heading",
+          "title": "ISBN-10 and ISBN-13: two generations, two moduli"
+        },
+        {
+          "key": "isbn10-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "ISBN-10 weights run 10 down to 2",
+                "text": "Digits `0 3 0 6 4 0 6 1 5` of `0306406152` get weights 10, 9, 8, 7, 6, 5, 4, 3, 2: products `0+27+0+42+24+0+24+3+10`.",
+                "state": "sum of first 9 = 130"
+              },
+              {
+                "title": "The check digit is 10 − (sum mod 11)",
+                "text": "`130 mod 11 = 9`, so the check digit is `(11 − 9) mod 11 = 2` — matching the last digit. A check digit of 10 is written as the letter `X`.",
+                "state": "check = 2 → valid"
+              },
+              {
+                "title": "Equivalent view: total must divide by 11",
+                "text": "Including the check digit (weight 1), the grand total is `132`, and `132 mod 11 = 0` → valid. Either formulation works.",
+                "state": "132 % 11 === 0 → valid"
+              }
+            ],
+            "title": "ISBN-10: 0-306-40615-2"
+          }
+        },
+        {
+          "key": "isbn13-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Alternating weights 1, 3, 1, 3… from the left",
+                "text": "`9780306406157`: digit × weight gives `9+21+8+0+3+0+6+12+0+18+1+15` before the check digit.",
+                "state": "sum of first 12 = 93"
+              },
+              {
+                "title": "Check digit makes the total a multiple of 10",
+                "text": "`93 + 7 = 100`, and `100 % 10 === 0` → valid. (Equivalently: `(10 − 93 mod 10) mod 10 = 7`.)",
+                "state": "check = 7 → valid"
+              }
+            ],
+            "title": "ISBN-13: 978-0-306-40615-7"
+          }
+        },
+        {
+          "key": "isbn-code",
+          "kind": "code",
+          "payload": {
+            "code": "function is_valid_isbn10(string $isbn): bool\n{\n    $isbn = preg_replace('/[\\s-]/', '', $isbn);\n    if (! preg_match('/^[0-9]{9}[0-9X]$/', $isbn)) {\n        return false;\n    }\n\n    $sum = 0;\n    for ($i = 0; $i < 9; $i++) {\n        $sum += (10 - $i) * (int) $isbn[$i];   // weights 10..2\n    }\n    $sum += $isbn[9] === 'X' ? 10 : (int) $isbn[9];\n\n    return $sum % 11 === 0;\n}",
+            "title": "ISBN-10 reference — note the 'X' branch",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "pesel",
+          "kind": "heading",
+          "title": "PESEL: a birth-date code with a mod-10 check"
+        },
+        {
+          "key": "pesel-text",
+          "kind": "prose",
+          "payload": {
+            "text": "PESEL is 11 digits: YYMMDD + a four-digit sequence number (with month offset for centuries) + one check digit. The check uses ten weights that **cycle 1, 3, 7, 9**: `1 3 7 9 1 3 7 9 1 3`. That cycle is the classic thing to get wrong — the debug task plants weight `2` at the start."
+          }
+        },
+        {
+          "key": "pesel-table",
+          "kind": "table",
+          "payload": {
+            "title": "PESEL 44051401359 — digit × weight, running total",
+            "headers": [
+              "Digit",
+              "4",
+              "4",
+              "0",
+              "5",
+              "1",
+              "4",
+              "0",
+              "1",
+              "3",
+              "5"
+            ],
+            "rows": [
+              [
+                "Weight",
+                "1",
+                "3",
+                "7",
+                "9",
+                "1",
+                "3",
+                "7",
+                "9",
+                "1",
+                "3"
+              ],
+              [
+                "Product",
+                "4",
+                "12",
+                "0",
+                "45",
+                "1",
+                "12",
+                "0",
+                "9",
+                "3",
+                "15"
+              ],
+              [
+                "Running total",
+                "4",
+                "16",
+                "16",
+                "61",
+                "62",
+                "74",
+                "74",
+                "83",
+                "86",
+                "101"
+              ]
+            ],
+            "note": "Check digit = (10 − (101 mod 10)) mod 10 = 9 — matches the last digit → valid. Digits: born 1944-05-14, sequence 013.",
+            "em": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "tip",
+          "kind": "callout",
+          "payload": {
+            "tone": "tip",
+            "text": "`$check = (10 - ($sum % 10)) % 10;` — the outer `% 10` matters: when the sum already ends in 0, plain `10 − 0` would give 10, which is not a digit. The double mod makes the result 0..9.",
+            "title": "The double modulo is not a typo"
+          }
+        },
+        {
+          "key": "nip",
+          "kind": "heading",
+          "title": "NIP: mod 11, and 10 is invalid"
+        },
+        {
+          "key": "nip-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Nine weights: 6 5 7 2 3 4 5 6 7",
+                "text": "For `1234563218`: `1×6 + 2×5 + 3×7 + 4×2 + 5×3 + 6×4 + 3×5 + 2×6 + 1×7`.",
+                "state": "sum = 118"
+              },
+              {
+                "title": "Check digit is sum mod 11 — unless it's 10",
+                "text": "`118 mod 11 = 8`, and the last digit is `8` → valid. NIP has no digit '10', so a check of 10 means the whole number is invalid (`return false`), not 'X' like ISBN-10.",
+                "state": "check = 8 → valid"
+              }
+            ],
+            "title": "NIP: 123-456-32-18"
+          }
+        },
+        {
+          "key": "cheatsheet",
+          "kind": "heading",
+          "title": "The one-page cheat sheet"
+        },
+        {
+          "key": "sheet-table",
+          "kind": "table",
+          "payload": {
+            "title": "Four validators compared",
+            "headers": [
+              "Validator",
+              "Length",
+              "Weights",
+              "Check digit",
+              "Gotcha"
+            ],
+            "rows": [
+              [
+                "Luhn",
+                "≥ 2",
+                "double every 2nd from the right, −9 if ≥ 10",
+                "total % 10 === 0",
+                "parity flips with length"
+              ],
+              [
+                "ISBN-10",
+                "10",
+                "10…2 (first 9)",
+                "(11 − sum % 11) % 11",
+                "check digit can be 'X' (10)"
+              ],
+              [
+                "ISBN-13",
+                "13",
+                "1, 3 alternating",
+                "(10 − sum % 10) % 10",
+                "EAN-compatible, prefix 978/979"
+              ],
+              [
+                "PESEL",
+                "11",
+                "1, 3, 7, 9 ×2.5 cycles",
+                "(10 − sum % 10) % 10",
+                "the 1-3-7-9 cycle"
+              ],
+              [
+                "NIP",
+                "10",
+                "6 5 7 2 3 4 5 6 7",
+                "sum % 11",
+                "check == 10 → invalid, return false"
+              ]
+            ],
+            "mono": [
+              1
+            ]
+          }
+        },
+        {
+          "key": "why",
+          "kind": "callout",
+          "payload": {
+            "tone": "why",
+            "text": "They are the same muscle with different weights — and each appears verbatim in Polish interview homework. Once you have written one correctly and **debugged it against a known-valid number**, the others are ten minutes each. That is the value of the debug twins in this module: they teach you to verify, not to hope.",
+            "title": "The four validators are one skill"
+          }
+        }
+      ]
+    },
+    {
+      "slug": "array-mechanics",
+      "title": "Array mechanics: projection, sorting, grouping",
+      "summary": "PHP's array functions each answer one precise question — project a column, sort by value, keep keys, deduplicate, flatten. Learn the comparator contract and PHP 8's stable sort, then rebuild the group / sort / dedup / paginate drills.",
+      "minutes": 10,
+      "difficulty": "medium",
+      "tags": [
+        "arrays",
+        "array_column",
+        "projection",
+        "sorting",
+        "usort",
+        "uasort",
+        "uksort",
+        "grouping",
+        "dedup",
+        "recursion",
+        "slice",
+        "spaceship",
+        "array_filter"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Two quiz questions (array_column, uasort) plus five snippet tasks (group_by, sort_by_key, dedup_by_key, flatten, paginate_array) all test the same underlying skill: **knowing which built-in does what, and what it does to keys**. Interviewers watch whether you reach for the named function or hand-roll a loop."
+          }
+        },
+        {
+          "key": "sort",
+          "kind": "heading",
+          "title": "Sorting: what each function does to your keys"
+        },
+        {
+          "key": "sort-text",
+          "kind": "prose",
+          "payload": {
+            "text": "PHP has four sorting families that look alike and behave very differently. The 'u' prefix means *user-defined comparison*, and 'a' means *associative (keys kept)*. Everything sorts **in place** and returns a `bool` — a classic slip is `$sorted = usort(...)` (you just assigned `true`)."
+          }
+        },
+        {
+          "key": "sort-table",
+          "kind": "table",
+          "payload": {
+            "title": "Choosing a sort function",
+            "headers": [
+              "Function",
+              "Sorts by",
+              "Keys",
+              "Notes"
+            ],
+            "rows": [
+              [
+                "`sort` / `rsort`",
+                "values",
+                "**reindexed**",
+                "plain lists"
+              ],
+              [
+                "`asort` / `arsort`",
+                "values",
+                "kept",
+                "built-in comparator"
+              ],
+              [
+                "`ksort` / `krsort`",
+                "keys",
+                "kept",
+                "built-in comparator"
+              ],
+              [
+                "`usort`",
+                "values, your comparator",
+                "**reindexed**",
+                "sorting a list of rows"
+              ],
+              [
+                "`uasort`",
+                "values, your comparator",
+                "kept",
+                "the quiz question's answer"
+              ],
+              [
+                "`uksort`",
+                "keys, your comparator",
+                "kept",
+                "rare"
+              ]
+            ],
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "sort-code",
+          "kind": "code",
+          "payload": {
+            "code": "$r = ['b' => 3, 'a' => 1, 'd' => 2];\n\n$kept  = $r;\nuasort($kept, fn ($x, $y) => $x <=> $y);   // keeps keys: ['a'=>1, 'd'=>2, 'b'=>3]\n$flat  = $r;\nusort($flat, fn ($x, $y) => $x <=> $y);    // reindexes: [1, 2, 3]\n\n// sorting a LIST of associative rows by a key:\nusort($rows, fn ($a, $b) => $a['score'] <=> $b['score']);",
+            "title": "uasort keeps keys, usort does not",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "All PHP sorts are **stable** since 8.0: elements the comparator declares equal keep their original relative order. That lets you sort by a secondary key first and a primary key second — the equal groups stay in secondary order. The dojo's `sort_by_key` task relies on stability for its tie-breaking.",
+            "title": "Equal elements keep their order"
+          }
+        },
+        {
+          "key": "stable-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Rows with a group key",
+                "text": "Start: `z (g=1)`, `a (g=1)`, `m (g=0)` — in that order.",
+                "state": "[z(g1), a(g1), m(g0)]"
+              },
+              {
+                "title": "Stable sort by group only",
+                "text": "Group 0 first, then group 1 — and because the sort is stable, `z` still precedes `a` inside group 1 (their original order).",
+                "state": "[m(g0), z(g1), a(g1)]"
+              },
+              {
+                "title": "Now sort each group by name",
+                "text": "A second, primary sort on the name of elements *within already-sorted groups* is what multi-key sorting needs. In `sort_by_key`, an explicit original-index tiebreaker makes the stability guarantee explicit even before PHP 8.",
+                "state": "grouped, then ordered inside each group"
+              }
+            ],
+            "title": "Why stability matters"
+          }
+        },
+        {
+          "key": "project",
+          "kind": "heading",
+          "title": "Projection: pulling one column out"
+        },
+        {
+          "key": "column-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "array_column: the purpose-built tool",
+                "text": "`array_column($rows, 'id')` returns the `id` values in row order — one call, no closure. It is the quiz question's answer and the fastest option.",
+                "state": "[7, 3]"
+              },
+              {
+                "title": "The third argument re-indexes",
+                "text": "`array_column($rows, 'email', 'id')` keys the result by another column — instantly an id → email lookup map.",
+                "state": "[7 => a@x.pl, 3 => b@x.pl]"
+              },
+              {
+                "title": "Why NOT array_filter",
+                "text": "`array_filter($rows, fn($r) => $r['id'])` returns whole rows, and the callback is a **truthiness** test: a row with `id = 0` is dropped silently. Filtering is selection, not projection.",
+                "state": "data-loss trap"
+              }
+            ],
+            "title": "Project a column without a loop"
+          }
+        },
+        {
+          "key": "group",
+          "kind": "heading",
+          "title": "Grouping and deduplicating rows"
+        },
+        {
+          "key": "group-code",
+          "kind": "code",
+          "payload": {
+            "code": "function group_by(array $rows, string $key): array\n{\n    $groups = [];\n    foreach ($rows as $row) {\n        $groups[$row[$key]][] = $row;   // keyed by the group value\n    }\n    return $groups;\n}",
+            "title": "group_by — grouping is just keying an accumulator",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "dedup-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Keep the first row per key value",
+                "text": "Walk the rows; if the key value was already seen, skip — otherwise remember it (strictly!) and keep the row.",
+                "state": "first occurrence wins"
+              },
+              {
+                "title": "Strict in_array is non-negotiable",
+                "text": "`in_array($v, $seen, true)` — without strict mode, the value `0` would collide with `'0'` and `false`, silently dropping valid rows. Same lesson as the comparison module, different disguise.",
+                "state": "'0' vs 0 vs false stay distinct"
+              }
+            ],
+            "title": "dedup_by_key — first occurrence wins"
+          }
+        },
+        {
+          "key": "flatten",
+          "kind": "heading",
+          "title": "Flattening is recursion wearing a disguise"
+        },
+        {
+          "key": "flatten-code",
+          "kind": "code",
+          "payload": {
+            "code": "function flatten(array $items): array\n{\n    $out = [];\n    foreach ($items as $item) {\n        if (is_array($item)) {\n            array_push($out, ...flatten($item));   // recurse, then spread\n        } else {\n            $out[] = $item;\n        }\n    }\n    return $out;\n}",
+            "title": "flatten — nested arrays, one level at a time",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "flatten-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Leaf or branch?",
+                "text": "For each element: if it is an array, it is a branch → recurse; otherwise it is a leaf → append.",
+                "state": "branch → recurse, leaf → append"
+              },
+              {
+                "title": "Trace one level",
+                "text": "`flatten([1, [2, [3, 4]], 5])`: `1` appends, `[2,[3,4]]` recurses into `2` + `flatten([3,4])` = `[3,4]` → `[2,3,4]` spread in, `5` appends.",
+                "state": "[1, 2, 3, 4, 5]"
+              }
+            ],
+            "title": "Recursion with a spread"
+          }
+        },
+        {
+          "key": "paginate",
+          "kind": "prose",
+          "payload": {
+            "text": "`paginate_array` is the simplest of the family and the easiest to get wrong under time pressure: 1-based pages need `array_slice($items, ($page - 1) * $perPage, $perPage)`. The `- 1` is the whole task — page 1 must slice from index 0."
+          }
+        },
+        {
+          "key": "tip",
+          "kind": "callout",
+          "payload": {
+            "tone": "tip",
+            "text": "- `array_column($rows, 'id')` — *'projects one column out of rows'*.\n- `uasort` vs `usort` — *'uasort keeps keys, usort reindexes'*.\n- `array_filter` — *'keeps rows whose callback is truthy — it selects, it does not project'*.\n- Sort functions — *'modify in place and return bool; stable since PHP 8'*.\n- `array_map` — *'applies to every element, returns the same shape'*.\nIf you can fire these off, the array section of any interview is two minutes of easy points.",
+            "title": "Drill these until automatic"
+          }
+        }
+      ]
+    },
+    {
+      "slug": "foreach-by-reference",
+      "title": "foreach by reference: the silent corruption",
+      "summary": "After foreach ($arr as &$v), $v stays bound to the last element. Any later by-value loop over the same array silently overwrites that element. Learn the pointer mechanics and the one-line fix.",
+      "minutes": 4,
+      "difficulty": "hard",
+      "tags": [
+        "foreach",
+        "references",
+        "unset",
+        "trap",
+        "arrays"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "This is the hardest quiz question in the module and the most 'trap-shaped' PHP behaviour you can be asked about, because it produces **no error, no notice** — just quietly wrong data. The dojo question asks for the cause and the fix; this lesson makes the mechanics visible."
+          }
+        },
+        {
+          "key": "mechanics",
+          "kind": "heading",
+          "title": "What foreach ($arr as &$v) actually does"
+        },
+        {
+          "key": "mechanics-text",
+          "kind": "prose",
+          "payload": {
+            "text": "In a **by-value** foreach, `$v` is a fresh copy of each element. In a **by-reference** foreach (`&$v`), `$v` is made to *alias* the current element's storage — and when the loop ends, `$v` is **still aliasing the last element**. Nothing resets it. If you later reuse `$v` in another loop over the same array, every assignment `$v = ...` writes straight into the array's last slot."
+          }
+        },
+        {
+          "key": "mechanics-code",
+          "kind": "code",
+          "payload": {
+            "code": "$arr = [1, 2, 3];\n\nforeach ($arr as &$v) {\n    // ... modify $arr via $v, e.g. double every value\n}\n// after the loop, $v is STILL a reference to $arr[2]\n\nforeach ($arr as $v) {\n    // each iteration assigns INTO $arr[2]:\n    //   iteration 1: $v = 1  ->  $arr[2] = 1\n    //   iteration 2: $v = 2  ->  $arr[2] = 2\n    //   iteration 3: $v = 2  ->  $arr[2] = 2\n}",
+            "title": "The classic corruption, no unset",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "state-table",
+          "kind": "table",
+          "payload": {
+            "title": "The array's state through the second loop",
+            "headers": [
+              "After iteration",
+              "$v assigned",
+              "$arr is now"
+            ],
+            "rows": [
+              [
+                "start",
+                "—",
+                "`[1, 2, 3]`"
+              ],
+              [
+                "1st",
+                "`1` (writes arr[2])",
+                "`[1, 2, 1]`"
+              ],
+              [
+                "2nd",
+                "`2` (writes arr[2])",
+                "`[1, 2, 2]`"
+              ],
+              [
+                "3rd",
+                "`2` (reads arr[2] = 2)",
+                "`[1, 2, 2]`  ← corrupted!"
+              ]
+            ],
+            "mono": [
+              1,
+              2
+            ],
+            "em": [
+              2
+            ]
+          }
+        },
+        {
+          "key": "trap-flow",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-flow\">\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-a\">foreach ($arr as &amp;$v)<span class=\"tag\">loop 1</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-b\">$v &#8658; $arr[2]<span class=\"tag\">alias survives!</span></span>\n  </div>\n  <div class=\"ld-col\"><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-a\">foreach ($arr as $v)<span class=\"tag\">loop 2</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-r\">$v = $x writes into $arr[2]<span class=\"tag\">silent corruption</span></span>\n  </div>\n  <div class=\"ld-col\"><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-r\">[1, 2, 2]<span class=\"tag\">wrong data, no error</span></span>\n  </div>\n</div>",
+            "title": "Where the alias goes after the first loop"
+          }
+        },
+        {
+          "key": "fix",
+          "kind": "heading",
+          "title": "The fix is one line"
+        },
+        {
+          "key": "fix-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Break the alias immediately",
+                "text": "The line right after the by-reference loop: `unset($v);`. This removes the variable's alias — later loops get a normal copy again.",
+                "state": "foreach($arr as &$v) {...} unset($v);"
+              },
+              {
+                "title": "Verify",
+                "text": "With `unset($v)`, the second loop behaves like any by-value loop and `$arr` stays `[1, 2, 3]`.",
+                "state": "[1, 2, 3]"
+              }
+            ],
+            "title": "unset($v) — no matter what, right after the loop"
+          }
+        },
+        {
+          "key": "tip",
+          "kind": "callout",
+          "payload": {
+            "tone": "tip",
+            "text": "Whenever you write `foreach ($arr as &$v)`, write `unset($v);` on the very next line **before writing the loop body**. The by-reference form is only needed when you genuinely mutate elements in place; for everything else prefer by-value with an indexed loop (`foreach ($arr as $k => $v)` + `$arr[$k] = ...`) which has no lingering alias at all.",
+            "title": "The habit that makes the bug impossible"
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Interview follow-ups to expect: 'why does this only reproduce when a *second* loop follows?' (because the corruption needs a write through the stale alias) and 'does PHP 8 still do this?' (yes — it is semantics, not a version quirk)."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "generators-lazy",
+      "title": "Generators: why yield keeps memory flat",
+      "summary": "A function containing yield returns a resumable Generator, not its values. Watch execution pause and resume between iterations, and understand why reading a million rows never allocates a million-row array.",
+      "minutes": 5,
+      "difficulty": "easy",
+      "tags": [
+        "generators",
+        "yield",
+        "memory",
+        "lazy",
+        "iterators"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The generator quiz question is really three questions in one: what does the function **return**, when does its body **run**, and where do the values **live**. The mental model is a paused coroutine — the function keeps its own state between yields."
+          }
+        },
+        {
+          "key": "model",
+          "kind": "heading",
+          "title": "A generator is a resumable function"
+        },
+        {
+          "key": "model-code",
+          "kind": "code",
+          "payload": {
+            "code": "function steps(): Generator\n{\n    echo \"  [gen] starting\\n\";\n    yield 1;\n    echo \"  [gen] middle\\n\";\n    yield 2;\n    echo \"  [gen] finishing\\n\";\n}\n\nforeach (steps() as $i => $value) {\n    echo \"  [main] got #{$i} = {$value}\\n\";\n}\n\n// Output — execution ping-pongs between the two scopes:\n//   [gen] starting\n//   [main] got #0 = 1\n//   [gen] middle\n//   [main] got #1 = 2\n//   [gen] finishing",
+            "title": "Execution interleaves with the consumer",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "model-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Calling the function runs nothing",
+                "text": "`steps()` returns a `Generator` object immediately — the body does not execute until the first iteration (the '[gen] starting' echo fires only inside the foreach).",
+                "state": "no output yet"
+              },
+              {
+                "title": "Each iteration = resume until next yield",
+                "text": "The consumer pulls one value, the generator runs up to the next `yield`, suspends, and keeps its local state for the next resume.",
+                "state": "ping-pong between scopes"
+              },
+              {
+                "title": "A final return value is allowed",
+                "text": "`return $x;` (not `yield`) ends iteration and stores a value read afterwards with `$gen->getReturn()` — handy for a summary after yielding rows.",
+                "state": "getReturn() after the loop"
+              }
+            ],
+            "title": "Three facts that answer the quiz"
+          }
+        },
+        {
+          "key": "pingpong",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-col\">\n  <span class=\"ld-box ld-a\">steps()<span class=\"tag\">call</span></span>\n  <span class=\"ld-down\">&#8595;</span>\n  <span class=\"ld-box ld-b\">Generator object<span class=\"tag\">body not run yet</span></span>\n  <span class=\"ld-down\">&#8595;</span>\n  <span class=\"ld-box ld-c\">foreach pulls #1<span class=\"tag\">consumer</span></span>\n  <span class=\"ld-down\">&#8595;</span>\n  <span class=\"ld-box ld-a\">run to yield 1<span class=\"tag\">generator</span></span>\n  <span class=\"ld-down\">&#8595;</span>\n  <span class=\"ld-box ld-c\">foreach pulls #2<span class=\"tag\">consumer</span></span>\n  <span class=\"ld-down\">&#8595;</span>\n  <span class=\"ld-box ld-a\">resume, run to yield 2<span class=\"tag\">generator</span></span>\n</div>",
+            "title": "Who runs when — generator vs consumer"
+          }
+        },
+        {
+          "key": "memory",
+          "kind": "heading",
+          "title": "Why memory stays flat"
+        },
+        {
+          "key": "memory-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Building `range(1, 1_000_000)` materialises a million-element array in memory (tens of megabytes on PHP 8). A generator that `yield`s each integer holds **one** value plus its own state — a few hundred bytes no matter how long the sequence. Same for a big file or a database cursor: read one row, `yield` it, forget it."
+          }
+        },
+        {
+          "key": "memory-code",
+          "kind": "code",
+          "payload": {
+            "code": "function readRows(string $file): Generator\n{\n    $handle = fopen($file, 'rb');\n    while (($row = fgetcsv($handle)) !== false) {\n        yield $row;                 // one row at a time, not the whole file\n    }\n    fclose($handle);\n}\n\nforeach (readRows('huge.csv') as $row) {\n    process($row);                  // constant memory for any file size\n}",
+            "title": "The classic use: streaming a file",
+            "lang": "php"
+          }
+        },
+        {
+          "key": "compose-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Yield from delegates to another generator",
+                "text": "`yield from $other;` forwards every value of another iterable/generator — compose pipelines without intermediate arrays.",
+                "state": "yield from chains generators"
+              },
+              {
+                "title": "Generators are single-use",
+                "text": "A `Generator` can be iterated once; re-iterating yields nothing. Build a fresh one (call the function again) if you need two passes.",
+                "state": "one pass per generator"
+              },
+              {
+                "title": "Infinite sequences are fine",
+                "text": "Because generation is lazy, an unbounded sequence is safe — the consumer just `break`s when it has enough.",
+                "state": "break to stop"
+              }
+            ],
+            "title": "Composing and the caveats"
+          }
+        },
+        {
+          "key": "why",
+          "kind": "callout",
+          "payload": {
+            "tone": "why",
+            "text": "When an interviewer asks about generators, they want to hear the *pain* they solve: memory-bound loops (huge CSV, export streams, SQL result sets) and composable lazy pipelines. The phrase that lands: **'a generator is a function that can pause — it produces values on demand instead of building the whole collection up front.'**",
+            "title": "One sentence for the interview"
+          }
+        }
+      ]
+    }
+  ]
+}

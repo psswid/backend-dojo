@@ -1,0 +1,329 @@
+{
+  "topic": {
+    "slug": "sql",
+    "name": "SQL & Database Queries",
+    "description": "JOINs, GROUP BY, window functions, indexes and N+1 — the SQL fluency that Polish Symfony/Laravel interviews test and that the ORM hides until it hurts.",
+    "color": "#0ea5e9",
+    "icon": "🗃️",
+    "sort_order": 8
+  },
+  "resources": [
+    {
+      "title": "MySQL 8.4 — JOIN",
+      "url": "https://dev.mysql.com/doc/refman/8.4/en/join.html",
+      "type": "docs",
+      "summary": "INNER, LEFT/RIGHT OUTER, CROSS JOIN semantics and the anti-join idiom."
+    },
+    {
+      "title": "MySQL 8.4 — Window Functions",
+      "url": "https://dev.mysql.com/doc/refman/8.4/en/window-functions.html",
+      "type": "docs",
+      "summary": "ROW_NUMBER, RANK, DENSE_RANK, LAG/LEAD and the OVER (PARTITION BY ... ORDER BY ...) clause."
+    },
+    {
+      "title": "MySQL 8.4 — EXPLAIN Output",
+      "url": "https://dev.mysql.com/doc/refman/8.4/en/explain-output.html",
+      "type": "docs",
+      "summary": "Reading the type, key, possible_keys and rows columns to judge a query plan."
+    },
+    {
+      "title": "Laravel — Eager Loading (N+1)",
+      "url": "https://laravel.com/docs/11.x/eloquent-relationships#eager-loading",
+      "type": "docs",
+      "summary": "with() and constrained eager loading as the cure for the N+1 query problem."
+    },
+    {
+      "title": "Use The Index, Luke",
+      "url": "https://use-the-index-luke.com/",
+      "type": "article",
+      "summary": "The canonical guide to B-tree indexes, composite indexes and the leftmost-prefix rule."
+    },
+    {
+      "title": "OWASP — SQL Injection",
+      "url": "https://owasp.org/www-community/attacks/SQL_Injection",
+      "type": "article",
+      "summary": "The injection attack class and why parameterized queries are the primary defense."
+    }
+  ],
+  "questions": [
+    {
+      "type": "single",
+      "prompt": "Which JOIN returns every row from the left table, and NULL for the right-table columns when there is no matching row?",
+      "options": [
+        "INNER JOIN",
+        "LEFT JOIN (LEFT OUTER JOIN)",
+        "RIGHT JOIN",
+        "CROSS JOIN"
+      ],
+      "correct": [1],
+      "explanation": "LEFT JOIN (a.k.a. LEFT OUTER JOIN) keeps every row of the left table and pads unmatched right rows with NULL — the standard shape when you want 'all X, with optional related Y'. INNER JOIN drops rows with no match on either side. RIGHT JOIN is the mirror image (keep every right row); it is legal but rare in practice because LEFT JOIN with the tables swapped is clearer. CROSS JOIN produces the Cartesian product of the two tables (every left row paired with every right row) and has no ON condition — almost never what you want for real data. Two idioms worth knowing: the anti-join — LEFT JOIN y ON ... WHERE y.id IS NULL — returns left rows that have NO match, and a plain INNER JOIN can be written with an ON clause or a WHERE join condition (they are equivalent in effect for inner joins). In Eloquent, leftJoin() maps to LEFT JOIN; the ORM's has() / whereDoesntHave() often compiles to EXISTS or a join behind the scenes.",
+      "difficulty": "easy",
+      "tags": ["joins", "left-join", "anti-join", "sql"],
+      "resources": [
+        {
+          "title": "MySQL 8.4 — JOIN",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/join.html",
+          "type": "docs",
+          "summary": "Join types and the IS NULL anti-join idiom."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "You must return only customers whose total order value exceeds 1000 (an aggregate). Which clause filters this, and why?",
+      "options": [
+        "WHERE, because it filters rows before grouping",
+        "HAVING, because it filters on aggregated results after GROUP BY",
+        "Either works identically on aggregates",
+        "LIMIT, because you are restricting the result size"
+      ],
+      "correct": [1],
+      "explanation": "HAVING filters groups after GROUP BY and aggregation; WHERE filters individual rows before grouping. The distinction is rooted in SQL's logical order of evaluation: FROM → WHERE → GROUP BY → HAVING → SELECT → ORDER BY → LIMIT. A condition on an aggregate (SUM(amount) > 1000) can only live in HAVING, because the aggregate value does not exist until grouping happens. A condition on a plain column (customer.country = 'PL') should go in WHERE — it runs earlier, can use an index, and shrinks the rows before the costlier grouping. The interview answer that scores points: 'WHERE on non-aggregated columns for early filtering and index use, HAVING only on aggregates', plus a nod to MySQL's ONLY_FULL_GROUP_BY mode, which rejects selecting columns that are neither aggregated nor in GROUP BY.",
+      "difficulty": "easy",
+      "tags": ["group-by", "having", "where", "aggregates"],
+      "resources": [
+        {
+          "title": "MySQL 8.4 — GROUP BY",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/group-by-handling.html",
+          "type": "docs",
+          "summary": "GROUP BY/HAVING behavior and ONLY_FULL_GROUP_BY."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "What is the difference between COUNT(*) and COUNT(column)?",
+      "options": [
+        "They are identical in every case",
+        "COUNT(*) counts rows; COUNT(column) counts only the non-NULL values of that column",
+        "COUNT(column) is always faster than COUNT(*)",
+        "COUNT(*) ignores NULLs, while COUNT(column) counts them"
+      ],
+      "correct": [1],
+      "explanation": "COUNT(*) counts every row in the result set regardless of NULLs. COUNT(column) counts only the non-NULL values of that column — so on a nullable column the two diverge, which is a classic source of 'why is my count wrong' bugs. COUNT(DISTINCT column) counts distinct non-NULL values. In InnoDB, COUNT(*) is not inherently slower than COUNT(column): it performs a full index scan, and the optimizer may pick the smallest available secondary index to do it. The practical lesson for an interview: when you count entities, use COUNT(*) (or COUNT(1), same thing); when you specifically need 'how many rows have a non-null value in X', use COUNT(X), and say so explicitly.",
+      "difficulty": "easy",
+      "tags": ["count", "aggregates", "null", "sql"],
+      "resources": [
+        {
+          "title": "MySQL 8.4 — COUNT",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/aggregate-functions.html",
+          "type": "docs",
+          "summary": "COUNT(*) vs COUNT(expr) semantics."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "An Eloquent view runs `$orders = Order::all();` and then, inside a loop, accesses `$order->customer->name`. The query log shows 1 query plus one more query per order. What is this problem, and what is the idiomatic fix?",
+      "options": [
+        "The N+1 query problem; fix by eager loading with with('customer') so a single extra query (or a join) loads all customers at once",
+        "A missing index; fix by adding an index on customer_id",
+        "Lazy loading is always optimal, so no fix is needed",
+        "A connection leak; fix by closing the PDO connection after each iteration"
+      ],
+      "correct": [0],
+      "explanation": "The N+1 problem: 1 query loads the list, then N additional queries run (one per row) because accessing $order->customer triggers a lazy load on each iteration — for 1000 orders that is 1001 queries instead of 2. The idiomatic Laravel fix is eager loading: Order::with('customer')->get() issues the list query plus ONE query for all customers (WHERE id IN (...)) and attaches them in memory. Related variants: with(['customer', 'items.product']) for nested relations, withCount() for aggregates, and constrained eager loading to limit what is loaded. In Doctrine, the equivalent is a fetch join in DQL (LEFT JOIN o.customer c) or marking the association EAGER, with the caveat that eager fetch joins can inflate result sets for to-many relations. To detect N+1 before it ships, watch the query log in Telescope/Debugbar, or write a test that asserts the query count (DB::listen / a profiler) does not grow linearly with the number of rows.",
+      "difficulty": "medium",
+      "tags": ["n+1", "eloquent", "eager-loading", "doctrine", "sql"],
+      "resources": [
+        {
+          "title": "Laravel — Eager Loading",
+          "url": "https://laravel.com/docs/11.x/eloquent-relationships#eager-loading",
+          "type": "docs",
+          "summary": "with() and constrained eager loading as the N+1 cure."
+        }
+      ]
+    },
+    {
+      "type": "multi",
+      "prompt": "A table has a composite index on (a, b). Which of the following queries can use that index effectively? Select all that apply.",
+      "options": [
+        "WHERE a = ?",
+        "WHERE b = ?",
+        "WHERE a = ? AND b = ?",
+        "WHERE a = ? ORDER BY b",
+        "WHERE a = ? OR b = ?"
+      ],
+      "correct": [0, 2, 3],
+      "explanation": "A B-tree composite index (a, b) is ordered first by a, then by b, which yields the leftmost-prefix rule: the index is usable when the query constrains the leading column(s) in order. WHERE a = ? uses the a part (index prefix). WHERE a = ? AND b = ? uses both parts fully. WHERE a = ? ORDER BY b can both filter on a and satisfy the ORDER BY b without a filesort, because within a single a value the index is already sorted by b. The two that fail: WHERE b = ? cannot use it, because b is not the leftmost column — you cannot skip a and jump straight to b. WHERE a = ? OR b = ? defeats the index, because the OR across different columns forces the optimizer to scan or combine two separate access paths. The practical takeaway: order a composite index by the columns you filter on equality first, then range/order columns, and never put the column you only ORDER BY ahead of the equality columns.",
+      "difficulty": "medium",
+      "tags": ["indexes", "composite-index", "leftmost-prefix", "sql"],
+      "resources": [
+        {
+          "title": "Use The Index, Luke",
+          "url": "https://use-the-index-luke.com/",
+          "type": "article",
+          "summary": "Composite index column ordering and the leftmost-prefix rule."
+        }
+      ]
+    },
+    {
+      "type": "multi",
+      "prompt": "Which of the following WHERE conditions tend to prevent an index from being used? Select all that apply.",
+      "options": [
+        "WHERE name LIKE '%foo'",
+        "WHERE name LIKE 'foo%'",
+        "WHERE YEAR(created_at) = 2024",
+        "WHERE created_at >= '2024-01-01'",
+        "WHERE a = 1 OR b = 2"
+      ],
+      "correct": [0, 2, 4],
+      "explanation": "Three patterns defeat an index. A leading wildcard (LIKE '%foo') cannot use a B-tree index because the match could start anywhere in the string — the index can only support prefix matches (LIKE 'foo%'). Wrapping a column in a function (YEAR(created_at) = 2024) prevents the index on created_at from being used, because the index stores raw values, not their YEAR() result; the sargable rewrite is a range: created_at >= '2024-01-01' AND created_at < '2025-01-01'. An OR across different columns (a = 1 OR b = 2) forces the optimizer to access via two separate paths or a scan, unless each side has its own usable index and it does an index-merge. The two fine options: LIKE 'foo%' is a prefix and can seek the index, and created_at >= '2024-01-01' is a normal range scan on the indexed column. The general rule: put the column on one side of the operator, unmodified, and avoid leading wildcards and ORs across columns.",
+      "difficulty": "medium",
+      "tags": ["indexes", "sargable", "like", "sql"],
+      "resources": [
+        {
+          "title": "Use The Index, Luke",
+          "url": "https://use-the-index-luke.com/",
+          "type": "article",
+          "summary": "Sargable predicates and why functions and leading wildcards break indexes."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "ROW_NUMBER(), RANK() and DENSE_RANK() all number rows within a window. What is the difference?",
+      "options": [
+        "ROW_NUMBER() is always unique; RANK() leaves gaps after ties; DENSE_RANK() has no gaps after ties",
+        "They are identical; the names are aliases",
+        "ROW_NUMBER() leaves gaps; RANK() does not; DENSE_RANK() is unique",
+        "Only RANK() accepts an ORDER BY inside OVER"
+      ],
+      "correct": [0],
+      "explanation": "All three assign a position within a window defined by OVER (PARTITION BY ... ORDER BY ...). ROW_NUMBER() is a plain, always-unique counter — for a tie it still gives distinct values in some order. RANK() gives tied rows the same rank and then skips: 1, 2, 2, 4. DENSE_RANK() gives tied rows the same rank without gaps: 1, 2, 2, 3. The choice depends on intent: 'top 3 rows per group' is ROW_NUMBER() (with an outer WHERE rn <= 3); 'rank of a score, with ties sharing a place' is RANK(); 'number of distinct values up to this point' is DENSE_RANK(). Window functions run after WHERE/GROUP BY but before ORDER BY, and — unlike GROUP BY — they do not collapse rows, so you keep every row while still computing per-group aggregates. MySQL has supported them since 8.0; PostgreSQL and modern SQLite too.",
+      "difficulty": "medium",
+      "tags": ["window-functions", "row_number", "rank", "sql"],
+      "resources": [
+        {
+          "title": "MySQL 8.4 — Window Functions",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/window-functions.html",
+          "type": "docs",
+          "summary": "ROW_NUMBER, RANK, DENSE_RANK and OVER semantics."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "Why does LIMIT 20 OFFSET 100000 get slow on a large table, and what is the standard alternative?",
+      "options": [
+        "OFFSET forces the database to scan and discard all preceding rows; keyset/cursor pagination (WHERE id > last_seen ORDER BY id LIMIT n) skips straight to the next page",
+        "OFFSET is always fast because it jumps directly to the requested row",
+        "The alternative is to raise the OFFSET until the query plan changes",
+        "There is no alternative; deep pagination is inherently unavoidable"
+      ],
+      "correct": [0],
+      "explanation": "OFFSET pagination is O(page): the database must still evaluate and discard the first 100000 matching rows before returning 20, and that cost grows linearly as you page deeper — even with an index, because the engine walks the ordered rows and skips them. The standard fix is keyset (cursor) pagination: remember the last value of the sort key and request the next page with WHERE id > last_seen ORDER BY id LIMIT 20, which seeks directly to the right position and stays O(log n). Keyset pagination requires a stable, unique sort key (usually the primary key or a composite (sort_key, id)) and naturally tolerates new rows inserted between pages; it trades away the ability to jump to an arbitrary page number. In Laravel this is cursorPaginate() (keyset) vs paginate() (OFFSET); the earlier cursor concept also shows up in the dojo's cursor tasks. A senior answer adds: keep a stable tiebreaker (ORDER BY created_at DESC, id DESC) so rows that share the sort key are not skipped or repeated.",
+      "difficulty": "medium",
+      "tags": ["pagination", "offset", "keyset", "cursor", "sql"],
+      "resources": [
+        {
+          "title": "Use The Index, Luke — Pagination",
+          "url": "https://use-the-index-luke.com/sql/partial-results/fetch-next-page",
+          "type": "article",
+          "summary": "Keyset pagination as the cure for deep OFFSET."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "In EXPLAIN output, which column tells you the access strategy (from best to worst: const, eq_ref, ref, range, index, ALL), where ALL means a full table scan?",
+      "options": [
+        "the type column",
+        "the rows column",
+        "the key column",
+        "the Extra column"
+      ],
+      "correct": [0],
+      "explanation": "The type column is the access type, ordered from best to worst roughly: system/const (one row via a unique key), eq_ref (one row per lookup, typical of a PK join), ref (non-unique index lookup), range (an index range scan), index (a full index scan, better than a full table scan), and ALL (full table scan — usually the thing you want to eliminate). The other columns matter too: possible_keys lists candidate indexes, key shows which one was actually chosen, rows is the optimizer's estimate of rows examined, and Extra can reveal a filesort, a temporary table, or 'Using index' (a covering index). The interview shorthand: 'start at type; if it says ALL on a large table, look for a missing index; then check rows and Extra for filesorts.' Adding an index is the fix only after you confirm the predicate is sargable and the column is selective.",
+      "difficulty": "medium",
+      "tags": ["explain", "query-plan", "indexes", "sql"],
+      "resources": [
+        {
+          "title": "MySQL 8.4 — EXPLAIN Output",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/explain-output.html",
+          "type": "docs",
+          "summary": "The type, key, rows and Extra columns of a query plan."
+        }
+      ]
+    },
+    {
+      "type": "multi",
+      "prompt": "Which of the following are safe against SQL injection? Select all that apply.",
+      "options": [
+        "Prepared statements with bound parameters (PDO::prepare + execute with placeholders)",
+        "Building the query by concatenating user input into the SQL string",
+        "The ORM query builder with bound values (where('id', $id))",
+        "Escaping quotes by hand with addslashes()",
+        "Casting a numeric id to int before interpolating it"
+      ],
+      "correct": [0, 2, 4],
+      "explanation": "The robust defense is parameterization: prepared statements with bound placeholders (PDO::prepare/execute, or mysqli_stmt) separate the SQL structure from the data, so user input can never alter the query. ORM query builders do the same — Eloquent's where('id', $id) and Doctrine's setParameter bind values. Casting a numeric id to int (or validating it with a regex) before interpolation is safe for that specific case, but it is fragile as a general policy — one day someone changes the field to a string and the habit breaks. The two failures: concatenating input into SQL is the injection vector itself, and addslashes() is not a defense (it misses the character-set and quoting nuances that a real escaping layer must handle, and escaping the data still leaves you one mistake away from injection). The rule to state: never assemble SQL from raw input; bind values, and use the ORM/query builder for dynamic queries. When you must write dynamic ORDER BY / column names, whitelist them against an allow-list instead of interpolating.",
+      "difficulty": "medium",
+      "tags": ["sql-injection", "prepared-statements", "security", "sql"],
+      "resources": [
+        {
+          "title": "OWASP — SQL Injection",
+          "url": "https://owasp.org/www-community/attacks/SQL_Injection",
+          "type": "article",
+          "summary": "The injection class and parameterization as primary defense."
+        }
+      ]
+    },
+    {
+      "type": "single",
+      "prompt": "Which statement about FULL OUTER JOIN in MySQL is correct?",
+      "options": [
+        "MySQL supports FULL OUTER JOIN with the same syntax as PostgreSQL",
+        "MySQL has no FULL OUTER JOIN; emulate it with a LEFT JOIN UNION a RIGHT JOIN (or LEFT JOIN UNION ALL plus a NOT EXISTS)",
+        "FULL OUTER JOIN is the default when you omit the JOIN type",
+        "FULL OUTER JOIN is just another name for CROSS JOIN"
+      ],
+      "correct": [1],
+      "explanation": "MySQL (unlike PostgreSQL, which has FULL OUTER JOIN) does not support FULL OUTER JOIN directly. The standard emulation is a LEFT JOIN UNION a RIGHT JOIN, which yields every row from both sides with NULLs where a side has no match: SELECT ... FROM a LEFT JOIN b ON ... UNION SELECT ... FROM a RIGHT JOIN b ON .... (A RIGHT JOIN alone is a LEFT JOIN with the tables swapped, so LEFT JOIN UNION RIGHT JOIN is the usual form.) The more precise, deduplication-safe variant for large sets is LEFT JOIN UNION ALL plus a NOT EXISTS / anti-join for the right-only rows. FULL OUTER JOIN is emphatically not a CROSS JOIN — a full outer join matches on the join condition and pads missing sides with NULL, whereas a cross join produces the Cartesian product. This is a favorite 'what does your database actually support' gotcha, because developers who switch between Postgres and MySQL assume the syntax is portable.",
+      "difficulty": "hard",
+      "tags": ["joins", "full-outer-join", "mysql", "postgres"],
+      "resources": [
+        {
+          "title": "MySQL 8.4 — JOIN",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/join.html",
+          "type": "docs",
+          "summary": "Supported join types and the UNION emulation of a full outer join."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "Schema: customers(id, name), orders(id, customer_id, status, total). Write the SQL that returns the top 5 customers by total paid revenue, showing customer id, name and revenue, highest first.",
+      "options": [],
+      "correct": [],
+      "explanation": "Model answer:\nSELECT c.id, c.name, SUM(o.total) AS revenue\nFROM customers c\nJOIN orders o ON o.customer_id = c.id\nWHERE o.status = 'paid'\nGROUP BY c.id, c.name\nHAVING SUM(o.total) > 0\nORDER BY revenue DESC\nLIMIT 5;\n\nWhy each clause: the JOIN relates customers to their orders; WHERE filters rows before grouping (only paid orders count); GROUP BY collapses to one row per customer, and under ONLY_FULL_GROUP_BY every non-aggregated selected column (c.id, c.name) must appear in GROUP BY; HAVING filters on the aggregate (here, drop zero-revenue customers — optional but typical); ORDER BY can reference the alias revenue; LIMIT 5 caps the result. Points to mention: the join direction (INNER JOIN drops customers with no paid orders, which is correct for 'top customers by revenue'), the difference between putting the status filter in WHERE vs ON (for an inner join they are equivalent, but for a LEFT JOIN the placement changes semantics), and the NULL nuance — SUM ignores NULLs, but a customer with no rows at all only appears if you use LEFT JOIN and would show NULL revenue (wrap with COALESCE to 0).",
+      "difficulty": "medium",
+      "tags": ["sql", "join", "group-by", "having", "write-query"],
+      "resources": [
+        {
+          "title": "MySQL 8.4 — GROUP BY",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/group-by-handling.html",
+          "type": "docs",
+          "summary": "GROUP BY, HAVING and ONLY_FULL_GROUP_BY."
+        }
+      ]
+    },
+    {
+      "type": "open",
+      "prompt": "You find this in a Laravel controller: $posts = Post::all(); foreach ($posts as $post) { echo $post->author->name; }. Explain what is wrong (with the exact number of queries for N posts), and give the idiomatic fix plus how you would detect this class of problem before it ships.",
+      "options": [],
+      "correct": [],
+      "explanation": "Model answer: this is the N+1 problem. Post::all() runs 1 query; then, because authors are not loaded, accessing $post->author on each iteration triggers a lazy load, so the code runs 1 + N queries (for N posts, N+1 total). For 100 posts that is 101 queries where 2 would do.\n\nFix: eager load the relation up front — Post::with('author')->get(). Eloquent then runs the posts query plus a single WHERE author_id IN (...) query and attaches authors in memory, so the loop performs no additional queries. For nested relations use with('author.team'); for aggregates use withCount('comments'). In Doctrine, write a DQL fetch join (SELECT p, a FROM Post p JOIN p.author a) or mark the association EAGER, being aware that fetch-joining a to-many association inflates the result set.\n\nDetection before shipping: watch the query log in Laravel Telescope or Debugbar (look for the same query repeated in a loop), or write an automated guard — a test that registers DB::listen and asserts the query count for a list of N rows is constant (does not grow with N). Fixing N+1 is easy; the skill is catching it before it reaches production.",
+      "difficulty": "medium",
+      "tags": ["n+1", "eloquent", "eager-loading", "sql"],
+      "resources": [
+        {
+          "title": "Laravel — Eager Loading",
+          "url": "https://laravel.com/docs/11.x/eloquent-relationships#eager-loading",
+          "type": "docs",
+          "summary": "with() and the mechanics of the single IN (...) query."
+        }
+      ]
+    }
+  ]
+}

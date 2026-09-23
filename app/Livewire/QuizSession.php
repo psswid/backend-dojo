@@ -3,6 +3,7 @@
 namespace App\Livewire;
 
 use App\Models\Question;
+use App\Models\QuizSession as QuizSessionRecord;
 use App\Models\Review;
 use App\Models\Topic;
 use App\Services\QuizService;
@@ -37,12 +38,124 @@ class QuizSession extends Component
 
     public int $startedAt = 0;
 
+    /** True when mount() resumed a previously interrupted session. */
+    public bool $resumed = false;
+
     public function mount(?Topic $topic = null): void
     {
         $this->topicId = $topic?->id;
         $this->title = $topic?->name ?? 'Due Review';
-        $this->startedAt = time();
-        $this->loadQuestions();
+
+        if (! $this->restoreSession()) {
+            $this->startedAt = time();
+            $this->loadQuestions();
+        }
+    }
+
+    // ---- session persistence ------------------------------------------------
+
+    protected function scope(): string
+    {
+        return $this->topicId ? 'topic' : 'review';
+    }
+
+    protected function topicKey(): int
+    {
+        return $this->topicId ?? 0;
+    }
+
+    protected function findSession(): ?QuizSessionRecord
+    {
+        $userId = auth()->id();
+
+        if (! $userId) {
+            return null;
+        }
+
+        return QuizSessionRecord::query()
+            ->where('user_id', $userId)
+            ->where('scope', $this->scope())
+            ->where('topic_key', $this->topicKey())
+            ->first();
+    }
+
+    /** Try to resume a stored in-progress session. Returns true when resumed. */
+    protected function restoreSession(): bool
+    {
+        $record = $this->findSession();
+
+        if (! $record || $record->finished) {
+            return false;
+        }
+
+        $state = $record->state;
+
+        $ids = array_values(array_filter(array_map('intval', $state['questionIds'] ?? [])));
+        $total = count($ids);
+
+        if ($total === 0) {
+            return false;
+        }
+
+        // Drop ids that no longer exist, preserving the stored order (defensive;
+        // seeders never delete rows, so this normally is a no-op).
+        $existing = Question::whereIn('id', $ids)->pluck('id')->map(fn ($id) => (int) $id)->all();
+        $existing = array_flip($existing);
+        $ids = array_values(array_filter($ids, fn ($id) => isset($existing[$id])));
+        $total = count($ids);
+
+        if ($total === 0) {
+            return false;
+        }
+
+        $this->questionIds = $ids;
+        $this->index = min(max((int) ($state['index'] ?? 0), 0), $total - 1);
+        $this->selected = array_map('intval', $state['selected'] ?? []);
+        $this->openAnswer = (string) ($state['openAnswer'] ?? '');
+        $this->revealed = (bool) ($state['revealed'] ?? false);
+        $this->correct = isset($state['correct']) ? (bool) $state['correct'] : null;
+        $this->openQuality = isset($state['openQuality']) ? (int) $state['openQuality'] : null;
+        $this->sessionCorrect = (int) ($state['sessionCorrect'] ?? 0);
+        $this->sessionTotal = (int) ($state['sessionTotal'] ?? 0);
+        $this->startedAt = (int) ($state['startedAt'] ?? time());
+        $this->resumed = true;
+
+        return true;
+    }
+
+    protected function snapshot(): array
+    {
+        return [
+            'questionIds' => $this->questionIds,
+            'index' => $this->index,
+            'selected' => $this->selected,
+            'openAnswer' => $this->openAnswer,
+            'revealed' => $this->revealed,
+            'correct' => $this->correct,
+            'openQuality' => $this->openQuality,
+            'sessionCorrect' => $this->sessionCorrect,
+            'sessionTotal' => $this->sessionTotal,
+            'startedAt' => $this->startedAt,
+        ];
+    }
+
+    protected function persistSession(): void
+    {
+        $userId = auth()->id();
+
+        if (! $userId) {
+            return;
+        }
+
+        QuizSessionRecord::updateOrCreate(
+            ['user_id' => $userId, 'scope' => $this->scope(), 'topic_key' => $this->topicKey()],
+            ['state' => $this->snapshot(), 'finished' => $this->finished]
+        );
+    }
+
+    protected function deleteSession(): void
+    {
+        $this->findSession()?->delete();
     }
 
     public function getCurrentQuestionProperty(): ?Question
@@ -72,6 +185,7 @@ class QuizSession extends Component
         $this->correct = $correct;
         $this->sessionTotal++;
         $this->record($quizService, $question, $this->selected, $correct, $correct ? 5 : 1);
+        $this->persistSession();
     }
 
     public function reveal(): void
@@ -83,6 +197,7 @@ class QuizSession extends Component
         }
 
         $this->revealed = true;
+        $this->persistSession();
     }
 
     public function grade(QuizService $quizService, int $quality): void
@@ -98,11 +213,13 @@ class QuizSession extends Component
         $this->correct = $quality >= 3;
         $this->sessionTotal++;
         $this->record($quizService, $question, ['text' => $this->openAnswer], $this->correct, $quality);
+        $this->persistSession();
     }
 
     public function selectOption(int $i): void
     {
         $this->selected = [$i];
+        $this->persistSession();
     }
 
     public function toggleOption(int $i): void
@@ -112,12 +229,20 @@ class QuizSession extends Component
         } else {
             $this->selected[] = $i;
         }
+
+        $this->persistSession();
+    }
+
+    public function updatedOpenAnswer(): void
+    {
+        $this->persistSession();
     }
 
     public function next(): void
     {
         if ($this->index + 1 >= count($this->questionIds)) {
             $this->finished = true;
+            $this->deleteSession();
 
             return;
         }
@@ -128,10 +253,14 @@ class QuizSession extends Component
         $this->revealed = false;
         $this->correct = null;
         $this->openQuality = null;
+        $this->persistSession();
     }
 
     public function restart(): void
     {
+        $this->deleteSession();
+        $this->resumed = false;
+        $this->startedAt = time();
         $this->loadQuestions();
     }
 

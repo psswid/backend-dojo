@@ -1,0 +1,1495 @@
+{
+  "topic_slug": "api-legacy-integration",
+  "lessons": [
+    {
+      "slug": "versioning-lifecycle",
+      "title": "API versioning: pick a mechanism, then sunset it cleanly",
+      "summary": "Where should the version live — the URL, a header, the query string, or the Accept header? Compare the four mechanisms against the goals that matter (log visibility, cacheability, loud failures), then walk the other end of a version's life: deprecation headers, brownouts and the 410 Gone cutover.",
+      "minutes": 11,
+      "difficulty": "medium",
+      "tags": [
+        "versioning",
+        "rest",
+        "api-design",
+        "api-versioning",
+        "content-negotiation",
+        "http-headers",
+        "regex",
+        "deprecation"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Versioning is the first decision an API makes about its own future, and this module asks about it twice — once at each end of a version's life. The quiz question hands you four mechanisms for requesting v2 (URI path, custom header, query parameter, Accept header) and asks which best serves three goals: the version visible in logs and bookmarks, plain HTTP caching, and a loud failure when a client omits it. The open question jumps years forward: 30 partners still call a legacy `v1` endpoint every day and you must retire it with a defensible, low-drama plan. Read both as one skill: **a version is a lifecycle**. You introduce it, run it side by side with its predecessor, and eventually retire it on a schedule — not by ambush."
+          }
+        },
+        {
+          "key": "goals",
+          "kind": "heading",
+          "title": "Why the version's location matters"
+        },
+        {
+          "key": "goals-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The corpus's quiz question is built on three concrete goals.\n\n- **Visibility**: the version should show up in access logs, bookmarks, monitoring and support tickets.\n- **Cacheability**: responses of different versions must never share one cache entry.\n- **Loud failure**: a client that forgets to state its version should hit an obvious error, never silently receive the wrong behaviour.\n\nThere is a fourth, implicit requirement that versioning exists to serve: while partners migrate, **v1 and v2 must run side by side**. URI prefixes make that trivial; header and query-string tricks make it fragile."
+          }
+        },
+        {
+          "key": "mechanisms-head",
+          "kind": "heading",
+          "title": "The four mechanisms on the table"
+        },
+        {
+          "key": "mechanisms-table",
+          "kind": "table",
+          "payload": {
+            "title": "Four ways to request v2, judged by the three goals",
+            "headers": [
+              "Mechanism",
+              "Visible in logs & bookmarks?",
+              "HTTP caching",
+              "Client omits the version",
+              "Bottom line"
+            ],
+            "rows": [
+              [
+                "`/api/v2/users` (URI path)",
+                "yes — part of the resource identifier",
+                "each version is a distinct URL — proxies and CDNs cache it with zero `Vary` config",
+                "hits the old endpoint or a `404` — loud",
+                "**the default** of Stripe and GitHub"
+              ],
+              [
+                "`X-API-Version: 2` (custom header)",
+                "no — hidden from the URL",
+                "needs `Vary: X-API-Version`, or responses from both versions mix in one cache entry",
+                "you must silently default it — the silent breakage you wanted to avoid",
+                "an extra signal at best"
+              ],
+              [
+                "`?api_version=2` (query parameter)",
+                "no",
+                "pollutes the identity of one canonical resource with a presentation concern — weaker cache keys and shared URLs",
+                "same silent-default problem",
+                "avoid for versioning"
+              ],
+              [
+                "`Accept: application/vnd.myapp.v2+json` (media type)",
+                "no — only in request headers",
+                "URLs stay clean, but every gateway, client library and proxy must honour vendor media types",
+                "nothing in the URL to inspect — debugging 'why did I get v1?' gets much harder",
+                "great for evolving one resource without bumping the whole path"
+              ]
+            ],
+            "note": "The three goals come straight from the quiz prompt: pick the mechanism whose failure mode is a loud 404 or an old-but-real endpoint, not a silent default.",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "routes-head",
+          "kind": "heading",
+          "title": "URI versioning, made real"
+        },
+        {
+          "key": "routes-code",
+          "kind": "code",
+          "payload": {
+            "code": "// routes/api.php — two generations of the same endpoint, side by side\nRoute::prefix('v1')->group(function () {\n    Route::get('/users', [App\\Http\\Controllers\\Api\\V1\\UserController::class, 'index']);\n});\n\nRoute::prefix('v2')->group(function () {\n    Route::get('/users', [App\\Http\\Controllers\\Api\\V2\\UserController::class, 'index']);\n});",
+            "lang": "php",
+            "title": "The version as a route prefix"
+          }
+        },
+        {
+          "key": "routes-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Neither Laravel nor Symfony ships first-class versioning, so teams implement the convention by hand: `Route::prefix('v1')` in Laravel, `#[Route('/api/v1/...')]` attributes in Symfony, dispatching different controllers per version. Because `/api/v1/users` and `/api/v2/users` are different URLs, the two namespaces are independent — old and new run side by side for as long as a migration needs, and removing v1 later is deleting routes, not re-plumbing the app. One refinement worth naming in an interview: the URI carries the **major** version; a vendor media type (the fourth row above) can later evolve a *single resource* without bumping the whole path — the module's SOAP-migration scenario leans on exactly this."
+          }
+        },
+        {
+          "key": "accept-head",
+          "kind": "heading",
+          "title": "Reading the Accept header (the drill)"
+        },
+        {
+          "key": "accept-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The snippet task `parseApiVersion` implements the media-type option: parse `application/vnd.api+json; version=N` out of an Accept header and return `N` as an int — or `null` when no version parameter is present. The task's rules are the interesting part: matching must be **case-insensitive** (media type and parameter name alike), parameters that follow the version (like `; q=0.9`) must be ignored, and the vendor type must be found even when it sits in a comma-separated list of other ranges."
+          }
+        },
+        {
+          "key": "accept-code",
+          "kind": "code",
+          "payload": {
+            "code": "function parseApiVersion(string $acceptHeader): ?int\n{\n    if (preg_match('~application/vnd\\.api\\+json;\\s*version=(\\d+)~i', $acceptHeader, $matches)) {\n        return (int) $matches[1];\n    }\n\n    return null;\n}",
+            "lang": "php",
+            "title": "The reference solution"
+          }
+        },
+        {
+          "key": "accept-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "Walking parseApiVersion('application/vnd.api+json; version=2')",
+            "steps": [
+              {
+                "title": "Pin the parameter to the vendor media type",
+                "text": "The regex searches the whole header for `application/vnd.api+json` followed by `;` and a `version=` parameter. Dots and `+` are regex metacharacters, so they are escaped; `\\s*` swallows the optional whitespace after the semicolon, and the `i` flag covers every letter of media type and parameter name.",
+                "state": "media type + version located"
+              },
+              {
+                "title": "Capture the digits",
+                "text": "`(\\d+)` puts the run of digits into `$matches[1]` as a string; casting with `(int)` gives the return value.",
+                "state": "$matches[1] = '2' -> int 2"
+              },
+              {
+                "title": "No version parameter means null",
+                "text": "A bare `application/vnd.api+json` has no `; version=N`, so nothing matches and the function returns `null` — the declared `?int` return type.",
+                "state": "null"
+              },
+              {
+                "title": "Case and trailing parameters",
+                "text": "`Application/VND.API+JSON; VERSION=7` matches thanks to `i`; a later `; q=0.9` lies outside the pattern, so only the digits right after `version=` are captured.",
+                "state": "7 / null / 3 when '; q=0.9' follows"
+              }
+            ]
+          }
+        },
+        {
+          "key": "accept-table",
+          "kind": "table",
+          "payload": {
+            "title": "The module task's own expectations — all verified",
+            "headers": [
+              "Accept header",
+              "parseApiVersion returns"
+            ],
+            "rows": [
+              [
+                "`application/vnd.api+json; version=2`",
+                "`2`"
+              ],
+              [
+                "`application/vnd.api+json`",
+                "`null`"
+              ],
+              [
+                "`Application/VND.API+JSON; VERSION=7`",
+                "`7` — the `i` flag"
+              ],
+              [
+                "`application/vnd.api+json; version=3; q=0.9`",
+                "`3` — trailing parameters ignored"
+              ],
+              [
+                "`text/html, application/vnd.api+json; version=5`",
+                "`5` — found among other ranges"
+              ]
+            ],
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "accept-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "A pattern that grabs any `~version=(\\d+)~` would pass the first four rows and fail only on headers where a *different* media type carries its own version parameter, or where the number you want belongs to `vnd.api+json` specifically. The reference pattern anchors on the full `application/vnd.api+json;` prefix precisely so a `version=` elsewhere in the header cannot win. Case-insensitivity is not a nicety here — it is in the task's test suite (`Application/VND.API+JSON; VERSION=7` → 7).",
+            "title": "Not every version= in the header counts"
+          }
+        },
+        {
+          "key": "dep-head",
+          "kind": "heading",
+          "title": "The other end: retiring a version on purpose"
+        },
+        {
+          "key": "dep-policy",
+          "kind": "prose",
+          "payload": {
+            "text": "The corpus's model answer for the deprecation question insists the rule be **published and written down before you need it**: typical public-API practice (Stripe-style) is a minimum of 6–12 months of warnings after the replacement ships, with removals tied to major versions or explicit sunset dates. A written policy is what stops business pressure from silently breaking partners on a Friday. Then the mechanics are mostly communication: announce on a public changelog and by email with a concrete sunset date, ship the v2 replacement with a migration guide and SDK/sample code, dual-run internally so v2 output can be compared with v1 semantics before partners move, offer migration support to the biggest callers — and migrate your **internal consumers first** so the dogfooding is clean."
+          }
+        },
+        {
+          "key": "dep-signals",
+          "kind": "table",
+          "payload": {
+            "title": "Signals while v1 still works",
+            "headers": [
+              "Signal",
+              "What it does",
+              "Why it earns its keep"
+            ],
+            "rows": [
+              [
+                "`Deprecation` response header",
+                "marks every legacy response as deprecated",
+                "engineers and client logs see the notice organically, months before the deadline"
+              ],
+              [
+                "`Sunset` response header",
+                "carries the date after which the resource may be removed",
+                "clients can act on a concrete deadline instead of an indefinite warning"
+              ],
+              [
+                "`Link` header / docs URL",
+                "points at the v2 equivalent",
+                "the migration path is discoverable from the response itself"
+              ],
+              [
+                "per-partner metering",
+                "every legacy call logged by API key / tenant / User-Agent",
+                "a usage dashboard: who calls, how often, with which parameters"
+              ],
+              [
+                "`deprecated: true` in the OpenAPI spec",
+                "flags the endpoint in the published contract",
+                "new consumers never adopt it"
+              ]
+            ],
+            "note": "In Laravel, put the deprecated route group behind middleware that adds these headers and emits metrics; in Symfony, the same via route attributes and an event listener.",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "dep-runway",
+          "kind": "steps",
+          "payload": {
+            "title": "The retirement runway",
+            "intro": "The corpus's end-to-end plan, condensed to mechanics.",
+            "steps": [
+              {
+                "title": "Announce and ship the replacement",
+                "text": "Public changelog plus direct email with a concrete sunset date; v2 endpoint, migration guide, SDK and sample code. Dual-run internally so v2 semantics are proven against v1 before partners move.",
+                "state": "partners know the deadline"
+              },
+              {
+                "title": "Migrate one client at a time",
+                "text": "Watch the usage dashboard, offer migration support to the biggest callers, and cut internal consumers over first.",
+                "state": "traffic drops per client"
+              },
+              {
+                "title": "Stage the enforcement — brownouts",
+                "text": "For stragglers: planned short windows where the legacy endpoint deliberately answers 503/429 during off-peak hours — a tactic Atlassian and Stripe have used to force attention without a hard break.",
+                "state": "503/429 during off-peak windows"
+              },
+              {
+                "title": "Sunset: return 410 Gone",
+                "text": "On the sunset date the endpoint answers 410 Gone — not 404 — with a body pointing at the v2 docs, and the route stays alive purely to log and redirect the last callers.",
+                "state": "410 Gone + v2 pointer"
+              },
+              {
+                "title": "Kill switch, then remove",
+                "text": "The route sits behind a config flag (legacy.enabled) so switching it off is a config change, not a deploy; remove code and monitoring only once traffic is truly zero. A contractually stuck partner becomes a documented business decision with an explicit extension — never an unbounded silent one.",
+                "state": "config flag off -> code removed"
+              }
+            ]
+          }
+        },
+        {
+          "key": "lifecycle-fig",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-flow ld-flow-nw\">\n  <div class=\"ld-col\"><span class=\"ld-box ld-a\">/api/v1/&#8230;<span class=\"tag\">serves partners</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-a\">/api/v2/&#8230;<span class=\"tag\">ships; both run</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-c\">Deprecation + Sunset<span class=\"tag\">headers on every v1 call</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-c\">brownout 503/429<span class=\"tag\">staged enforcement</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-r\">410 Gone<span class=\"tag\">sunset date</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-dim\">remove route<span class=\"tag\">traffic is zero</span></span></div>\n</div>",
+            "title": "The full lifecycle of an API version",
+            "caption": "Every step is observable by the client: the Sunset header and the brownouts are how a deadline becomes real instead of a blog post."
+          }
+        },
+        {
+          "key": "gone-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "`404` says 'I could not find that'. `410` says 'that existed and is intentionally gone'. The distinction is operational: after a 404 a support ticket starts with 'maybe the URL changed', while after a 410 the answer is 'that endpoint was retired on the published date' — and the client can point at the Sunset header it ignored. The same logic explains the brownouts: deliberate 503/429 are a communication mechanism, not a server fault.",
+            "title": "410 Gone is not a typo for 404"
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Interview echo for the mechanism question: answer with the three goals (logs, caching, loud failure), name URI versioning as the default (Stripe, GitHub) and explain exactly why the header and query-string options force silent defaults. For the deprecation question: a written 6–12 month policy, Deprecation/Sunset headers plus per-partner metering, brownouts for stragglers, and a 410 Gone cutover behind a config flag. The same vocabulary returns in the module's SOAP-migration scenario — there the legacy surface gets versioned, metered and retired with exactly this playbook."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "representation-layers",
+      "title": "One entity, many representations: resources and groups",
+      "summary": "The same User entity must be public on one endpoint and rich on an admin endpoint. Laravel answers with API Resources (JsonResource), Symfony with serialization groups — both keep the choice of fields out of controllers and out of the persistence model.",
+      "minutes": 7,
+      "difficulty": "medium",
+      "tags": [
+        "serialization",
+        "laravel",
+        "api-resources",
+        "symfony",
+        "api",
+        "api-design"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Two single-choice questions in this module ask the same thing in two frameworks: a public profile endpoint should return only `name` and `avatar`, while an admin endpoint also exposes `email`, `roles` and internal notes — one entity, two JSON views, no duplicated DTO mapping. The Laravel question tests whether you reach for **API Resources**; the Symfony question tests whether you reach for **serialization groups**. Both are outbound representation layers: the place where the wire format is decided."
+          }
+        },
+        {
+          "key": "layer-head",
+          "kind": "heading",
+          "title": "The outbound layer problem"
+        },
+        {
+          "key": "layer-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Without a representation layer, the shape of your JSON leaks into controllers as a sprinkle of `->only()` and `->toArray()` calls — and the moment two endpoints need different shapes, that logic duplicates and drifts. The wrong fixes are almost as common as the problem:\n\n- `FormRequest` is the **inbound** layer — it validates and authorizes before the controller runs; it has nothing to do with what you send back.\n- A trait that adds `toArray()` to every model couples your persistence model to one wire format and breaks the day a second shape appears.\n- A global middleware that strips attributes based on the current route hides the response contract in magic that guesses intent — implicit and hard to test.\n\nThe idiomatic answer in both frameworks is a declared, per-endpoint representation: a Laravel resource class or a Symfony serialization group set."
+          }
+        },
+        {
+          "key": "laravel-head",
+          "kind": "heading",
+          "title": "Laravel: API Resources"
+        },
+        {
+          "key": "laravel-code",
+          "kind": "code",
+          "payload": {
+            "code": "// generated with: php artisan make:resource UserResource\nclass UserResource extends JsonResource\n{\n    public function toArray($request): array\n    {\n        return [\n            'id'     => $this->id,\n            'name'   => $this->name,\n            'avatar' => $this->avatar_url,\n        ];\n    }\n}\n\nclass AdminUserResource extends JsonResource\n{\n    public function toArray($request): array\n    {\n        return [\n            'id'     => $this->id,\n            'name'   => $this->name,\n            'avatar' => $this->avatar_url,\n            'email'  => $this->email,\n            'roles'  => $this->roles,\n            'orders' => OrderResource::collection($this->whenLoaded('orders')),\n        ];\n    }\n}",
+            "lang": "php",
+            "title": "One model, two resources — the controller just picks one"
+          }
+        },
+        {
+          "key": "laravel-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`toArray($request)` returns exactly the array that becomes the JSON response, so one endpoint returns `UserResource::make($user)` and another `AdminUserResource::make($user)` — same model, different wire format, zero duplication. Two details interviewers listen for: **conditional fields** (`whenLoaded('orders')` or `mergeWhen(...)`) serialize a relationship only if it was actually eager-loaded, and **returning a paginator from a resource-backed controller preserves Laravel's pagination metadata** (`total`, `current_page`, the page links) instead of flattening it away."
+          }
+        },
+        {
+          "key": "laravel-options",
+          "kind": "table",
+          "payload": {
+            "title": "The Laravel quiz options, dissected",
+            "headers": [
+              "Candidate",
+              "What it actually is",
+              "Verdict"
+            ],
+            "rows": [
+              [
+                "Extend `JsonResource`, implement `toArray($request)`",
+                "the idiomatic transformation layer — one shape per resource class",
+                "**correct**"
+              ],
+              [
+                "Extend `FormRequest` and define `rules()`",
+                "the inbound layer: validation and authorization before the controller",
+                "wrong layer — nothing to do with outgoing JSON"
+              ],
+              [
+                "A trait adding `toArray()` to every model",
+                "couples the persistence model to a single wire format",
+                "breaks the moment two endpoints need different shapes"
+              ],
+              [
+                "Global middleware stripping attributes per route",
+                "representation logic guesses intent from the URL",
+                "implicit contract, hard to test"
+              ]
+            ],
+            "mono": [
+              0
+            ],
+            "em": [
+              2
+            ]
+          }
+        },
+        {
+          "key": "symfony-head",
+          "kind": "heading",
+          "title": "Symfony: serialization groups"
+        },
+        {
+          "key": "symfony-code",
+          "kind": "code",
+          "payload": {
+            "code": "use Symfony\\Component\\Serializer\\Annotation\\Groups;\n\nclass User\n{\n    #[Groups('public')]\n    public string $name = '';\n\n    #[Groups(['public', 'admin'])]\n    public ?string $avatarUrl = null;\n\n    #[Groups('admin')]\n    public array $roles = [];\n\n    #[Groups('admin')]\n    public string $internalNote = '';\n}\n\n// public profile endpoint:\n$publicJson = $serializer->serialize($user, 'json', ['groups' => ['public']]);\n\n// admin endpoint — same entity, same pipeline, different context:\n$adminJson = $serializer->serialize($user, 'json', ['groups' => ['admin']]);",
+            "lang": "php",
+            "title": "One entity, one normalizer pipeline, per-endpoint groups"
+          }
+        },
+        {
+          "key": "symfony-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Annotate properties (or methods) with `#[Groups]`, then pass the desired group set through the serializer context; only members in at least one requested group are normalized. Each endpoint chooses its own set, so you get one entity, one pipeline and zero duplication — and with API Platform the same idea is configured per operation via `normalization_context`. Three extra points worth making in an interview: groups **compose** (a property can carry several), they work **symmetrically for denormalization** (importing legacy payloads uses the same mechanism — the anti-corruption lesson leans on this), and the Laravel analogue of 'one entity, several JSON views' is separate resource classes or conditionals inside one `toArray($request)`."
+          }
+        },
+        {
+          "key": "symfony-options",
+          "kind": "table",
+          "payload": {
+            "title": "The Symfony quiz options, dissected",
+            "headers": [
+              "Candidate",
+              "What it actually is",
+              "Verdict"
+            ],
+            "rows": [
+              [
+                "Serialization groups via `#[Groups]` + groups context",
+                "one pipeline, field sets chosen per endpoint",
+                "**correct**"
+              ],
+              [
+                "A JSONP callback registered on the route",
+                "a cross-domain script-loading technique (and a security smell) — not a field filter",
+                "wrong mechanism entirely"
+              ],
+              [
+                "`serialize()` the raw object, strip keys in controllers",
+                "PHP's internal serialization format, not JSON — plus manual, fragile key stripping",
+                "wrong twice"
+              ],
+              [
+                "Two separate Serializer service instances via compiler passes",
+                "duplicates all normalizer/encoder wiring for no benefit — context already varies the output",
+                "over-engineering; the groups context does it on one instance"
+              ]
+            ],
+            "mono": [
+              0
+            ],
+            "em": [
+              2
+            ]
+          }
+        },
+        {
+          "key": "tip",
+          "kind": "callout",
+          "payload": {
+            "tone": "tip",
+            "text": "The representation layer is your wire contract: resource classes and group sets are what clients compile against. Keep each endpoint's shape explicit (one resource class or one group set per consumer type), add fields additively, and treat a shape change as a versioning decision — the previous lesson's rules apply to the JSON body too.",
+            "title": "Representation is a public contract"
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Interview takeaway in one line: **'one entity, several representations' is solved at the boundary** — a Laravel resource class per endpoint, a Symfony group per endpoint — never in the controller and never on the model. The module's legacy questions reuse the same instinct on the inbound side: when a legacy system sends you XML-shaped data, you denormalize into *your* model at the boundary instead of letting its shape leak in."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "pagination-hypermedia",
+      "title": "Pagination and hypermedia: the JSON that moves the client along",
+      "summary": "paginate() already knows the total; cursorPaginate() trades totals for stable keyset pages. Then comes the harder design question: how much hypermedia should responses carry, and when does link-driven navigation pay for itself?",
+      "minutes": 9,
+      "difficulty": "medium",
+      "tags": [
+        "pagination",
+        "laravel",
+        "api-design",
+        "hateoas",
+        "rest",
+        "api"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Two of the module's questions are about moving the client through results. The easy one checks what Laravel puts in a paginated response (`paginate(25)` → which metadata is present). The open one asks how far to take the next step: links as hypermedia that *drive* navigation (HATEOAS). Both are really the same question — 'what does the client need in the response to know where it is and where it can go next?'"
+          }
+        },
+        {
+          "key": "meta-head",
+          "kind": "heading",
+          "title": "The paginator already knows the total"
+        },
+        {
+          "key": "meta-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`Order::paginate(25)` transparently runs a count query and returns a `LengthAwarePaginator` whose default JSON serialization includes `data`, `links` and a `meta` block with `current_page`, `last_page`, `per_page`, `total` and more — exactly what page-number UIs need, with no extra work from you. The quiz trap is the opposite claim: that Laravel only returns the requested page and forces a separate count query. The count is already executed; the interesting part is choosing *which* paginator."
+          }
+        },
+        {
+          "key": "meta-code",
+          "kind": "code",
+          "payload": {
+            "code": "Route::get('/orders', function () {\n    // paginate(25) -> LengthAwarePaginator; a resource collection\n    // keeps its pagination meta in the JSON (data, links, meta).\n    return OrderResource::collection(Order::paginate(25));\n});",
+            "lang": "php",
+            "title": "Controller shape — the meta survives the resource"
+          }
+        },
+        {
+          "key": "paginators-table",
+          "kind": "table",
+          "payload": {
+            "title": "Three paginators, three contracts",
+            "headers": [
+              "Paginator",
+              "Count query?",
+              "total / last_page in the JSON?",
+              "Stable when rows are inserted between requests?",
+              "Right default for"
+            ],
+            "rows": [
+              [
+                "`paginate(25)`",
+                "yes — run transparently",
+                "yes — `current_page`, `last_page`, `per_page`, `total`",
+                "no — offset can skip or duplicate rows as data mutates",
+                "page-number UIs; small-to-medium tables"
+              ],
+              [
+                "`simplePaginate(25)`",
+                "no",
+                "no `total`, no `last_page`",
+                "no — same offset weakness",
+                "'next/prev' flows where the count on a huge table is too expensive"
+              ],
+              [
+                "`cursorPaginate(25)`",
+                "no",
+                "no totals — the links carry a keyset cursor instead",
+                "yes — pages stay stable under inserts",
+                "infinite scroll over large tables; no deep `OFFSET` scans"
+              ]
+            ],
+            "note": "Keyset (cursor) pagination needs a stable, unique sort order — that is the price of skipping OFFSET over millions of rows.",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "offset-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "Offset pagination degrades with page depth and can skip or duplicate rows when the underlying data changes between two requests — that is the documented reason `cursorPaginate()` exists. If an interviewer asks 'when would you *not* use cursor pagination?', the answer is: when your UI genuinely needs `total`/`last_page` (page-number grids) or when your sort key is not stable and unique.",
+            "title": "The trade-off is totals vs stability"
+          }
+        },
+        {
+          "key": "hateoas-head",
+          "kind": "heading",
+          "title": "Hypermedia: how much should links drive?"
+        },
+        {
+          "key": "hateoas-benefits",
+          "kind": "prose",
+          "payload": {
+            "text": "The module's open question frames HATEOAS (Hypermedia As The Engine Of Application State — the third level of the Richardson Maturity Model) as a genuine proposal to evaluate, not a buzzword to worship. The honest benefits:\n\n- **The server becomes the source of truth for legal transitions.** A link's *presence* encodes what the client may do: an already-paid order simply has no `pay` link, so clients cannot call invalid actions.\n- **URLs can evolve without a coordinated client release.** Clients discover links instead of hard-coding endpoints, so resources can move and affordances can appear without shipping new client code.\n- **Responses become self-describing**, shrinking the out-of-band documentation clients must encode."
+          }
+        },
+        {
+          "key": "hateoas-costs",
+          "kind": "prose",
+          "payload": {
+            "text": "And the honest costs, which are why the corpus stops short of endorsing it wholesale:\n\n- Payloads grow, and **every consumer becomes a small hypermedia engine** — parsing links and implementing traversal is more code and more failure modes than calling a documented URL.\n- The dominant consumption path, **client code generation from OpenAPI, assumes fixed endpoints** — full HATEOAS fights the tooling most third-party teams actually use.\n- Versioning does not disappear: link semantics (what does `next` mean, which transitions exist in v1) are still contracts, and clients must validate that server-returned URLs are what they expect.\n- Debugging and testing get harder because behaviour is spread across responses; and blindly following server-returned URLs can open SSRF/open-redirect-style holes."
+          }
+        },
+        {
+          "key": "hateoas-rmm",
+          "kind": "callout",
+          "payload": {
+            "tone": "why",
+            "text": "Richardson's Maturity Model is the map interviewers use to place an API: level 0 is one endpoint with everything POSTed at it, level 1 introduces real resource URIs, level 2 uses HTTP verbs and status codes properly (where most successful public APIs live), and level 3 is hypermedia — links drive state transitions. HATEOAS' defenders and critics are arguing about level 3; knowing which level your API sits on is half the answer.",
+            "title": "Level 3 is the top of the maturity model"
+          }
+        },
+        {
+          "key": "hateoas-recommendation",
+          "kind": "prose",
+          "payload": {
+            "text": "The corpus's recommendation is a spectrum, not a binary. The pragmatic middle ground — the choice of Stripe, GitHub and most successful public APIs — is: include **stable `self` and pagination links**, add **state-dependent action links only where they genuinely encode a workflow** (an order resource exposing only currently-legal transitions), and keep documenting fixed endpoints in OpenAPI. Reserve full link-driven HATEOAS for closed systems with a handful of long-lived clients, server-driven UIs, or state-machine-heavy domains (IoT, fulfilment) where the cost of link traversal is repaid by decoupling. Concretely in Laravel, links are assembled in API Resources or a small link-builder service (or by adopting JSON:API/HAL conventions); in Symfony, a custom normalizer injects them during serialization."
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Where do the page numbers themselves live? In the query string — `?page=3&per_page=25` — which is exactly the territory of the module's parsing drills. Building those parameter arrays correctly (and letting the caller's `page` win over a stale one) is what the request-grammar lesson practises; read it next if paginated URLs are the part you hand-wave."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "request-grammar",
+      "title": "Query strings and request params: parsing and building URLs",
+      "summary": "Page numbers, filters and pagination parameters travel in the query string, which is a string with grammar: split on &, split each pair on the first =, then urldecode both sides. Walk the module's parse_query_string drills and the paginateParams fix that makes page and per_page always win.",
+      "minutes": 9,
+      "difficulty": "medium",
+      "tags": [
+        "query-string",
+        "url-encoding",
+        "parsing",
+        "query-parameters",
+        "http",
+        "debugging"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Pagination parameters, filters and (in some designs) versions travel in the URL — which makes 'parse a query string correctly' a recurring piece of API interview homework. The module carries a snippet task (`parse_query_string`), its debug twin (the values stay encoded) and a pagination-parameters drill (`paginateParams`). They test the same discipline the Accept-header drill tested: **split precisely, decode exactly, and never guess** what a framework might have done for you."
+          }
+        },
+        {
+          "key": "grammar-head",
+          "kind": "heading",
+          "title": "The grammar of a query string"
+        },
+        {
+          "key": "grammar-table",
+          "kind": "table",
+          "payload": {
+            "title": "parse_query_string rules — every output below is what the reference solution actually returns",
+            "headers": [
+              "Rule",
+              "Input",
+              "Output"
+            ],
+            "rows": [
+              [
+                "split pairs on `&`",
+                "`a=1&b=2`",
+                "`['a'=>'1','b'=>'2']`"
+              ],
+              [
+                "a key without `=` gets an empty-string value",
+                "`flag`",
+                "`['flag'=>'']`"
+              ],
+              [
+                "the value may be empty",
+                "`a=`",
+                "`['a'=>'']`"
+              ],
+              [
+                "empty pairs are skipped (edge or double `&`)",
+                "`a=1&&b=2`",
+                "`['a'=>'1','b'=>'2']`"
+              ],
+              [
+                "repeated key: the last value wins",
+                "`a=1&a=2`",
+                "`['a'=>'2']`"
+              ],
+              [
+                "decode keys AND values: `+` becomes space, `%XX` decodes",
+                "`b=hello+world`, `q=a%20b%26c`",
+                "`['b'=>'hello world']`, `['q'=>'a b&c']`"
+              ],
+              [
+                "empty input is a valid query",
+                "`''`",
+                "`[]`"
+              ]
+            ],
+            "mono": [
+              1
+            ],
+            "em": [
+              2
+            ]
+          }
+        },
+        {
+          "key": "reference-code",
+          "kind": "code",
+          "payload": {
+            "code": "function parse_query_string(string $query): array\n{\n    if ($query === '') {\n        return [];\n    }\n\n    $result = [];\n    foreach (explode('&', $query) as $pair) {\n        if ($pair === '') {\n            continue;\n        }\n\n        $pos = strpos($pair, '=');\n        if ($pos === false) {\n            $result[urldecode($pair)] = '';\n        } else {\n            $key   = urldecode(substr($pair, 0, $pos));\n            $value = urldecode(substr($pair, $pos + 1));\n            $result[$key] = $value;\n        }\n    }\n\n    return $result;\n}",
+            "lang": "php",
+            "title": "The reference implementation — decode on both sides"
+          }
+        },
+        {
+          "key": "decode-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "The debug twin of this task plants exactly one bug: the pairs are split correctly, but `urldecode` is never called. `'b=hello+world'` then parses to the literal `'hello+world'`, `'q=a%20b%26c'` stays `'a%20b%26c'`, and a key like `'a%20key'` never becomes `'a key'`. If you add decoding to the value only, the key-decode test still fails — `urldecode` must run on **both** sides of the `=`.",
+            "title": "Decode the key too, not just the value"
+          }
+        },
+        {
+          "key": "decode-table",
+          "kind": "table",
+          "payload": {
+            "title": "Broken vs reference, side by side",
+            "headers": [
+              "Input",
+              "Reference output",
+              "Broken output (no urldecode)"
+            ],
+            "rows": [
+              [
+                "`b=hello+world`",
+                "`'hello world'`",
+                "`'hello+world'`"
+              ],
+              [
+                "`q=a%20b%26c`",
+                "`'a b&c'`",
+                "`'a%20b%26c'`"
+              ],
+              [
+                "`a%20key=1`",
+                "key `'a key'`",
+                "key `'a%20key'`"
+              ]
+            ],
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "walk-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "parse_query_string('b=hello+world&flag') stage by stage",
+            "steps": [
+              {
+                "title": "Split on &",
+                "text": "`explode('&', ...)` yields the pair list `['b=hello+world', 'flag']` — no empty pairs here, so nothing is skipped.",
+                "state": "['b=hello+world', 'flag']"
+              },
+              {
+                "title": "Split each pair at the first =",
+                "text": "`strpos($pair, '=')` finds the separator once: `'b=hello+world'` becomes key `'b'`, value `'hello+world'`. The pair `'flag'` has no `=` — by the rules it is a key with an empty-string value.",
+                "state": "'b' + 'hello+world'  |  'flag' alone"
+              },
+              {
+                "title": "urldecode both sides",
+                "text": "`urldecode('hello+world')` turns the `+` into a space; a key such as `'a%20key'` would decode the same way. Nothing is decoded for `'flag'`.",
+                "state": "'hello world'"
+              },
+              {
+                "title": "Assemble in encounter order",
+                "text": "Keys keep their first-encounter order: `['b' => 'hello world', 'flag' => '']`. A repeated key would simply overwrite in place — last value wins.",
+                "state": "['b'=>'hello world', 'flag'=>'']"
+              }
+            ]
+          }
+        },
+        {
+          "key": "encode-head",
+          "kind": "heading",
+          "title": "The inverse direction: building query strings"
+        },
+        {
+          "key": "encode-text",
+          "kind": "prose",
+          "payload": {
+            "text": "If parsing is decoding, building is encoding — and the two must be exact inverses. PHP's `http_build_query()` is the encoder your API client code would use, and its default encoding matches the `+`-for-space rule above (verified on PHP 8.4):"
+          }
+        },
+        {
+          "key": "encode-code",
+          "kind": "code",
+          "payload": {
+            "code": "var_dump(http_build_query(['a' => 'hello world', 'b' => 'x&y']));\n// 'a=hello+world&b=x%26y'   <- default encoding: space becomes '+'\n\nvar_dump(http_build_query(['a' => 'hello world', 'b' => 'x&y'], '', '&', PHP_QUERY_RFC3986));\n// 'a=hello%20world&b=x%26y' <- RFC 3986 mode: space becomes '%20'",
+            "lang": "php",
+            "title": "Two encodings, both decodable by urldecode"
+          }
+        },
+        {
+          "key": "parsestr-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "Why not just call `parse_str()`? Because its semantics are *not* the task's contract. Verified on PHP 8.4: `parse_str('a.b=1&c d=2&flag', $out)` produces `['a_b' => '1', 'c_d' => '2', 'flag' => '']` — dots, spaces and plus signs inside keys are silently rewritten to underscores (`'a+b=1'` → key `'a_b'`) — and it additionally understands array syntax like `a[]=1`. When the contract demands literal keys and explicit rules, the hand-rolled reference above is the deterministic answer, and knowing *why* is a good sign you understand URL encoding.",
+            "title": "parse_str mangles keys — verified"
+          }
+        },
+        {
+          "key": "params-head",
+          "kind": "heading",
+          "title": "paginateParams: page and per_page must win"
+        },
+        {
+          "key": "params-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The `paginateParams` drill sits right at the seam between this lesson and pagination: you are building the query-parameter array for a paginated request — preserving the caller's filters (`status`, `q`, ...) while replacing `page` and `per_page` with the values the caller wants *now*, appended last. The planted bug seeds the result with the new values and then copies the old params on top — so a stale `page` or `per_page` that survives in `$params` (a shared bookmark, a chained call) silently overrides the caller."
+          }
+        },
+        {
+          "key": "params-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "paginateParams(['status' => 'paid', 'page' => 1, 'per_page' => 10], 4, 50)",
+            "steps": [
+              {
+                "title": "Drop the stale pagination keys first",
+                "text": "`unset($params['page'], $params['per_page'])` — any value the caller may have carried in from a previous request is removed before the new one is written.",
+                "state": "['status' => 'paid']"
+              },
+              {
+                "title": "Append the caller's page last",
+                "text": "Writing `$params['page'] = 4` after the unset guarantees the new value wins and that `page` sits at the end of the array, after the filters.",
+                "state": "['status' => 'paid', 'page' => 4]"
+              },
+              {
+                "title": "Append per_page, done",
+                "text": "`$params['per_page'] = 50` — the final array matches the task's expectation exactly, and chaining (`paginateParams(paginateParams(...))`) moves to the next page correctly.",
+                "state": "['status' => 'paid', 'page' => 4, 'per_page' => 50]"
+              }
+            ]
+          }
+        },
+        {
+          "key": "params-code",
+          "kind": "code",
+          "payload": {
+            "code": "function paginateParams(array $params, int $page, int $perPage): array\n{\n    unset($params['page'], $params['per_page']);\n\n    $params['page'] = $page;\n    $params['per_page'] = $perPage;\n\n    return $params;\n}",
+            "lang": "php",
+            "title": "The fix is two lines — unset first, append after"
+          }
+        },
+        {
+          "key": "params-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "The broken variant produces `['page' => 1, 'per_page' => 10, 'status' => 'paid']` for the example above — the stale `page => 1` and `per_page => 10` from the input overwrite the caller's `4` and `50`, and the key order is scrambled too. Order matters to strict array comparison, but the real bug is semantic: the caller's explicit pagination must always beat a value that merely survived in the parameter array.",
+            "title": "Last write wins — which is why the bug works"
+          }
+        },
+        {
+          "key": "tip",
+          "kind": "callout",
+          "payload": {
+            "tone": "tip",
+            "text": "When an interviewer asks 'what else would you test?', rattle off the parse edge cases: the empty string (a valid query returning `[]`), a key without `=`, an empty value, doubled `&` separators, repeated keys (last wins), and encoded input on **both** sides of the `=` — including keys. Those are exactly the hidden rows in this module's test suite.",
+            "title": "The empty-string and edge-case litany"
+          }
+        }
+      ]
+    },
+    {
+      "slug": "token-revocability",
+      "title": "API tokens: stateless JWTs vs revocable server-side records",
+      "summary": "Passport is a full OAuth2 server; Sanctum is deliberately simpler. Beneath the package choice sits the trade that matters: stateless JWTs cannot be revoked before exp, while DB-backed tokens die the moment their row is deleted.",
+      "minutes": 8,
+      "difficulty": "medium",
+      "tags": [
+        "auth",
+        "oauth2",
+        "laravel",
+        "sanctum",
+        "passport",
+        "jwt",
+        "security",
+        "http"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "This module's two auth questions are a pair. The easy one asks which Laravel package to reach for when third-party applications need real OAuth2 flows (client credentials, authorization code, refresh tokens, scopes). The hard one takes the opposite angle: a teammate calls Sanctum obsolete and proposes stateless JWTs because 'there is no DB lookup per request'. The through-line is **revocability** — knowing what each token design can and cannot do after it leaves your server."
+          }
+        },
+        {
+          "key": "packages-head",
+          "kind": "heading",
+          "title": "Laravel's two token packages"
+        },
+        {
+          "key": "packages-table",
+          "kind": "table",
+          "payload": {
+            "title": "Passport, Sanctum, Fortify and Breeze — what each one is",
+            "headers": [
+              "Package",
+              "What it is",
+              "Tokens / grants",
+              "Revocation",
+              "Best for"
+            ],
+            "rows": [
+              [
+                "Laravel Passport",
+                "a complete OAuth2 server built on league/oauth2-server",
+                "client credentials, authorization code (with PKCE in modern versions), refresh-token grant; per-client scopes",
+                "server-side revocation of OAuth tokens; can also serve its own first-party SPA",
+                "third-party integrations that need the full OAuth2 dance"
+              ],
+              [
+                "Laravel Sanctum",
+                "a deliberately simpler token + SPA package",
+                "personal access tokens — long random strings stored **hashed** in the `personal_access_tokens` table; cookie-based SPA session auth",
+                "deleting the token row kills it on the very next request",
+                "your own mobile app or SPA, where a full OAuth dance is overkill"
+              ],
+              [
+                "Laravel Fortify",
+                "authentication scaffolding: login, registration, two-factor",
+                "none — implements no OAuth2 at all",
+                "—",
+                "headless auth backend for your own UI"
+              ],
+              [
+                "Laravel Breeze",
+                "a starter kit for login/registration views",
+                "none",
+                "—",
+                "scaffolding auth UI, not a token API"
+              ]
+            ],
+            "note": "Sanctum's 'abilities' are simple string checks, not an OAuth2 scope lifecycle with refresh semantics — the wrong tool the moment a third-party portal needs scopes and refresh tokens.",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "pick-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The choice rule of thumb from the corpus: **external third-party apps needing OAuth2 → Passport**; **first-party mobile and SPA clients that just need a token → Sanctum**. The quiz's distractor options exist to test that you know the ecosystem: Fortify and Breeze are auth *UI/scaffolding*, not token issuers, and claiming Sanctum 'can issue personal access tokens to anyone' misses why Passport exists. Third-party JWT packages (e.g. tymon/jwt-auth or php-open-source-saver/jwt-auth) sit on the stateless side of the next trade-off."
+          }
+        },
+        {
+          "key": "axis-head",
+          "kind": "heading",
+          "title": "The trade that matters: stateless vs revocable"
+        },
+        {
+          "key": "axis-text",
+          "kind": "prose",
+          "payload": {
+            "text": "A signature-valid JWT is trusted until its `exp` claim, no matter what happens in your database. That is the whole dispute: revoking a leaked token, a fired employee's access or an abusive account **before expiry** requires workarounds — a short `exp` plus a revocable refresh token, or a denylist/blacklist of `jti` values in Redis or the DB, which silently reintroduces the per-request store lookup the 'stateless' pitch promised to remove (and only covers tokens you know about). Sanctum stores each token hashed and revocation is a row delete that takes effect on the next request; Passport keeps revocable OAuth tokens server-side."
+          }
+        },
+        {
+          "key": "axis-table",
+          "kind": "table",
+          "payload": {
+            "title": "The axis, in table form",
+            "headers": [
+              "Concern",
+              "Stateless JWT",
+              "DB-backed token (Sanctum / Passport)"
+            ],
+            "rows": [
+              [
+                "Revoke before expiry",
+                "only via workarounds: short `exp` + refresh token, or a `jti` denylist that reintroduces a store lookup",
+                "instant — delete/flag the row and the next request is rejected"
+              ],
+              [
+                "Per-request verification",
+                "HMAC verify costs microseconds — not meaningfully slower than an indexed lookup, and many setups pay a store round-trip anyway",
+                "one indexed lookup of the hashed token"
+              ],
+              [
+                "Theft window after a leak",
+                "until `exp`",
+                "until someone revokes the row"
+              ],
+              [
+                "Server-side secrets / clock",
+                "shared secret or keypair to manage — plus algorithm and clock-skew sharp edges",
+                "no shared secret; opaque random strings"
+              ]
+            ],
+            "note": "Both kinds are bearer secrets: the JWT 'works over HTTP so it needs TLS' myth is inverted — both must travel over TLS, always.",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "tls-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "A quiz option in this module claims JWTs only work over HTTPS while Sanctum tokens can also travel over plain HTTP. That is dangerously wrong: **both are bearer secrets** — anything that presents the token is authenticated as its owner, so sending either over plain HTTP leaks it to any observer. The correct statement is the opposite: neither belongs outside TLS.",
+            "title": "Bearer secrets belong on TLS, full stop"
+          }
+        },
+        {
+          "key": "jwt-sharp",
+          "kind": "prose",
+          "payload": {
+            "text": "If the interviewer keeps pushing on JWT, the sharp edges to name are the ones the corpus lists: **algorithm-confusion attacks** (an attacker rewrites the `alg` header to `none` or `HS256` when the server expects `RS256`), **secret management and rotation**, **clock-skew handling** for `exp`/`nbf`, and larger per-request payloads versus a compact opaque token. Then land the design question: choose stateless only where instant revocation is not a requirement; otherwise keep short-lived tokens plus a revocable refresh mechanism."
+          }
+        },
+        {
+          "key": "why",
+          "kind": "callout",
+          "payload": {
+            "tone": "why",
+            "text": "One sentence for the interview: **'statelessness and revocability are a trade — a token you cannot look up is a token you cannot kill.'** Sanctum and Passport pay a tiny indexed lookup per request and win the ability to revoke instantly; a pure JWT skips the lookup and loses that ability until `exp`. Real designs often end up with both: short stateless access tokens and a revocable refresh grant.",
+            "title": "The one-liner that lands"
+          }
+        }
+      ]
+    },
+    {
+      "slug": "defensive-http-contracts",
+      "title": "Defensive HTTP contracts: 429s, error envelopes, idempotency",
+      "summary": "Three questions, one theme: when a request fails or is retried, the response must let clients act correctly. Rate limiting answers 429 with Retry-After, error envelopes standardize every failure, and idempotency keys make POST retries safe against double-charging.",
+      "minutes": 11,
+      "difficulty": "medium",
+      "tags": [
+        "rate-limiting",
+        "throttle",
+        "error-handling",
+        "rfc7807",
+        "idempotency",
+        "http",
+        "api-design",
+        "payments"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Three of the module's questions share one theme: what a client should be able to *do* with a failed request. Rate limiting has a machine-readable answer (`429` + `Retry-After`), failures have a standardized envelope (RFC 7807 / RFC 9457 style, with a stable code and a request id), and the scariest failure of all — 'did the charge go through?' — has an idempotency key. Each one converts an ambiguous or punitive response into a contract the client can program against."
+          }
+        },
+        {
+          "key": "ratelimit-head",
+          "kind": "heading",
+          "title": "429: the machine-readable 'slow down'"
+        },
+        {
+          "key": "ratelimit-code",
+          "kind": "code",
+          "payload": {
+            "code": "use Illuminate\\Cache\\RateLimiting\\Limit;\nuse Illuminate\\Http\\Request;\nuse Illuminate\\Support\\Facades\\RateLimiter;\n\nRateLimiter::for('api', fn (Request $request) => Limit::perMinute(60)->by(\n    $request->user()?->id ?: $request->ip()\n));\n\n// attach it to the route group:\n// Route::middleware('throttle:api')->group(...);",
+            "lang": "php",
+            "title": "The module's limiter: per user, falling back to IP"
+          }
+        },
+        {
+          "key": "ratelimit-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Once the budget is exhausted, Laravel's `throttle:api` middleware resolves the named limiter and answers **HTTP 429 Too Many Requests** with a **`Retry-After` header in seconds** (knowable here because `Limit::perMinute` makes the reset time predictable) and, when enabled, `X-RateLimit-Limit` / `X-RateLimit-Remaining` headers. The 429 semantics themselves are standardized in RFC 6585. The counters live in the cache store — use the Redis cache driver in production so increments are atomic and shared across workers."
+          }
+        },
+        {
+          "key": "ratelimit-table",
+          "kind": "table",
+          "payload": {
+            "title": "Why the wrong status codes are wrong",
+            "headers": [
+              "Response",
+              "What it would signal",
+              "Why it is wrong here"
+            ],
+            "rows": [
+              [
+                "`403 Forbidden`",
+                "the client is not allowed to use the API at all",
+                "authorization, not pacing — the client may be perfectly permitted, just too fast; conflating the two breaks client logic"
+              ],
+              [
+                "`503 Service Unavailable`",
+                "the server cannot handle load right now",
+                "it would encourage clients to retry *harder*, the opposite of backing off"
+              ],
+              [
+                "`200` with an empty body",
+                "success with nothing in it",
+                "this behaviour does not exist — silently dropping requests makes debugging and backoff impossible"
+              ],
+              [
+                "`429` + `Retry-After`",
+                "'too many requests — try again at this time'",
+                "**correct**: standardized in RFC 6585, and the header tells the client exactly when to retry"
+              ]
+            ],
+            "mono": [
+              0
+            ],
+            "em": [
+              2
+            ]
+          }
+        },
+        {
+          "key": "ratelimit-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "The limiter key in the module's example falls back to `$request->ip()`. Behind a load balancer that means every user shares the proxy's IP — unless you configure Laravel's TrustProxies, you either throttle everyone at once or trust a spoofable `X-Forwarded-For`. Per-authenticated-user keys (`by($user->id)`) are the robust default for APIs; Symfony's equivalent is the Rate Limiter component (`symfony/rate-limiter`), which also returns 429 with Retry-After when a limiter rejects the request.",
+            "title": "The IP fallback is why TrustProxies exists"
+          }
+        },
+        {
+          "key": "errors-head",
+          "kind": "heading",
+          "title": "One error envelope for every failure"
+        },
+        {
+          "key": "errors-text",
+          "kind": "prose",
+          "payload": {
+            "text": "A good error envelope has three jobs: let **code branch reliably**, let **humans understand**, and let **support trace**. The corpus's model answer checks off a stable machine-readable code (`VALIDATION_FAILED`, `RATE_LIMITED`) alongside a human-readable message; a request/correlation identifier the client can echo into support tickets; and RFC 7807 / RFC 9457's `application/problem+json` with `type`, `title`, `status` and `detail`. Symfony embraces the standard directly — HttpKernel's problem normalizer and API Platform produce it by default — while in Laravel you shape responses in the exception handler: `render()` (or the `withExceptions()` callback in `bootstrap/app.php` since Laravel 11), keeping Laravel's nested `errors` object for field-level 422 details and returning a clean production 500 with the request id."
+          }
+        },
+        {
+          "key": "errors-example",
+          "kind": "code",
+          "payload": {
+            "code": "HTTP/1.1 422 Unprocessable Entity\nContent-Type: application/problem+json\n\n{\n  \"type\": \"https://example.com/problems/validation-failed\",\n  \"title\": \"Validation failed\",\n  \"status\": 422,\n  \"code\": \"VALIDATION_FAILED\",\n  \"detail\": \"The email field is required.\",\n  \"errors\": { \"email\": [\"The email field is required.\"] },\n  \"request_id\": \"req_8f1c4a\"\n}",
+            "lang": "text",
+            "title": "An illustrative envelope: RFC 7807 fields + Laravel-style nested errors + request id"
+          }
+        },
+        {
+          "key": "errors-table",
+          "kind": "table",
+          "payload": {
+            "title": "What belongs in the envelope — the module's multi-select, judged",
+            "headers": [
+              "Element",
+              "Why it belongs",
+              "Example"
+            ],
+            "rows": [
+              [
+                "stable machine-readable error code",
+                "clients switch on it without string-matching localized messages",
+                "`VALIDATION_FAILED`, `RATE_LIMITED`"
+              ],
+              [
+                "human-readable message",
+                "readable by developers and end users alike",
+                "the `detail` field"
+              ],
+              [
+                "request / correlation id",
+                "turns a vague bug report into a grep-able log line",
+                "`X-Request-Id` header, echoed in the body"
+              ],
+              [
+                "RFC 7807 / 9457 fields",
+                "a standardized `application/problem+json` shape; Symfony and API Platform emit it by default",
+                "`type`, `title`, `status`, `detail`"
+              ],
+              [
+                "full stack trace / exception class",
+                "**the anti-pattern**: leaks file paths, class structure and framework internals to anyone probing the API; breaks the very contract you are building",
+                "never — debug output stays out of production responses"
+              ]
+            ],
+            "note": "Laravel has no built-in request-id header — you add a small middleware that generates one, logs it with every entry, and includes it in the error body.",
+            "mono": [
+              2
+            ],
+            "em": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "idem-head",
+          "kind": "heading",
+          "title": "Idempotency keys: making POST retry-safe"
+        },
+        {
+          "key": "idem-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The payment scenario in the module is the classic **ambiguous outcome**: the partner's client times out waiting for the response, but the charge actually succeeded; a blind retry charges the customer twice. The standard fix — the pattern Stripe made famous — is an `Idempotency-Key`: the client sends a value that uniquely identifies the *logical operation* (one key per payment intent), created **before the first attempt and reused on retries**. The server persists the key together with the result — typically a unique database constraint on `(merchant_id, idempotency_key)` or a Redis entry with a TTL — so a retried key short-circuits to the stored original response and the operation runs at most once."
+          }
+        },
+        {
+          "key": "idem-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "The retry flow that never double-charges",
+            "steps": [
+              {
+                "title": "The client creates the key first",
+                "text": "One key per new payment intent, generated before the first attempt. A fresh key means 'a brand-new operation'.",
+                "state": "Idempotency-Key: K"
+              },
+              {
+                "title": "First attempt times out — ambiguous",
+                "text": "The request may or may not have been applied. The client cannot tell from the timeout alone, so it must not assume failure.",
+                "state": "charged or not? unknown"
+              },
+              {
+                "title": "The server recorded the outcome under K",
+                "text": "First execution persists key + result under a unique constraint or a Redis entry with TTL, then responds.",
+                "state": "operation ran at most once"
+              },
+              {
+                "title": "Retry sends the same K",
+                "text": "The server finds the stored key and replays the stored original response instead of executing again.",
+                "state": "replay, not re-execute"
+              }
+            ]
+          }
+        },
+        {
+          "key": "idem-table",
+          "kind": "table",
+          "payload": {
+            "title": "Safe vs idempotent — the vocabulary that answers follow-ups",
+            "headers": [
+              "Method",
+              "Safe (no side effects)?",
+              "Idempotent (repeatable end state)?",
+              "Note"
+            ],
+            "rows": [
+              [
+                "`GET` / `HEAD` / `OPTIONS`",
+                "yes",
+                "yes",
+                "safe methods are the ones caching layers may replay freely"
+              ],
+              [
+                "`PUT` / `DELETE`",
+                "no",
+                "yes",
+                "deleting an already-missing resource is still 'deleted' — same end state"
+              ],
+              [
+                "`POST`",
+                "no",
+                "no",
+                "creations and charges are neither — which is why they get explicit idempotency support"
+              ]
+            ],
+            "note": "A 'GET payments endpoint so retries are safe' proposal is wrong twice: GET is defined as safe and non-mutating, and retrofitting a charge endpoint onto GET changes semantics instead of adding guarantees.",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "idem-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "text": "Two traps hide in the quiz options. A **fresh UUID per attempt** tells the server these are distinct operations, so the retry creates a second charge — exactly the bug you are fixing. And a **status-check-then-retry** dance is a fragile workaround: it races with an original request that is still in flight, and it pushes correctness onto every consumer instead of guaranteeing it server-side. In Laravel you implement the pattern as middleware or a service method that consults the idempotency store before executing; in Symfony, an event subscriber on `kernel.request`/`kernel.response` does the same.",
+            "title": "Fresh key per retry = double charge"
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "The three mechanisms compose into one defensive posture: rate limiting tells the client *when* to back off, the error envelope tells it *what* went wrong and how to report it, and idempotency keys let it retry the operations where retrying is dangerous. The legacy lesson will reuse the idempotency discipline on the other side of the fence — most legacy SOAP endpoints are not idempotent, so you enforce at-most-once yourself with your own unique reference."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "legacy-soap-acl",
+      "title": "Wrapping a legacy SOAP system in an anti-corruption layer",
+      "summary": "A legacy ERP's model contradicts yours and must stay swappable. Put a port and adapter between them, keep all SOAP and XML knowledge inside the adapter, add timeouts, circuit breaking and at-most-once idempotency — then prove the boundary with fakes, golden files and consumer contracts.",
+      "minutes": 12,
+      "difficulty": "hard",
+      "tags": [
+        "legacy",
+        "soap",
+        "acl",
+        "integration",
+        "testing",
+        "architecture",
+        "ddd",
+        "contract-testing",
+        "pact",
+        "anti-corruption-layer",
+        "deprecation-strategy",
+        "api-design"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Three of the module's hardest questions circle one scenario: a 15-year-old ERP (or SOAP endpoint) still in production, with a data model that contradicts yours, must be integrated into a modern application — and must stay **replaceable within a few years without rewriting your domain**. One is the ACL open question (legacy 'Customer' vs your 'Account', different enums, currencies and IDs), one is the SOAP checkout integration, and the third turns the pair into a versioning-and-retirement scenario: a SOAP surface and a REST v2 surface serving the same business logic. This lesson assembles the shared skeleton: boundary → transport → robustness → proof."
+          }
+        },
+        {
+          "key": "conflict-head",
+          "kind": "heading",
+          "title": "Two models that refuse to agree"
+        },
+        {
+          "key": "conflict-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The legacy subsystem calls its entity `Customer`; your new core calls it `Account`. Status enums differ, currency and ID conventions differ, and the schema has quirks you do not want to inherit. If the domain code talks to the ERP directly, every legacy oddity — its status codes, its string ids, its XML types — becomes part of your domain model, and swapping the ERP later means rewriting everything that ever touched it. The anti-corruption layer (ACL, from Fowler) is the translating boundary that prevents exactly that: **the legacy system on one side, your domain on the other, and all translation between the two vocabularies in between.**"
+          }
+        },
+        {
+          "key": "acl-fig",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-flow ld-flow-nw\">\n  <div class=\"ld-col\"><span class=\"ld-box ld-dim\">Legacy ERP<span class=\"tag\">SOAP + XML</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-c\">SoapLegacyOrderGateway<span class=\"tag\">adapter: transport, XML, faults</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-b\">OrderGateway<span class=\"tag\">domain port</span></span><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\"><span class=\"ld-box ld-a\">Checkout domain<span class=\"tag\">PlaceOrderRequest / Result</span></span></div>\n</div>",
+            "title": "The ACL in one line: legacy vocabulary dies at the adapter",
+            "caption": "No controller, service or domain class ever sees SoapClient, a SoapFault or an XML element. Swap the ERP: write one new adapter, rebind it in the container, and nothing else changes."
+          }
+        },
+        {
+          "key": "ports-head",
+          "kind": "heading",
+          "title": "Ports and adapters: the client-side ACL"
+        },
+        {
+          "key": "ports-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The concrete artifacts, in a dedicated namespace such as `App\\Integrations\\LegacyErp` (Laravel) or an integration module (Symfony):\n\n- **A domain port** — an interface written in your domain's language: `OrderGateway::placeOrder(PlaceOrderRequest): PlaceOrderResult`, or `CustomerDirectory::find(CustomerId): Customer`.\n- **An adapter implementing the port** — it owns every transport and deserialization detail (the SOAP client, the XML, the legacy DB access) and translates in both directions.\n- **Translators / assemblers** — legacy DTOs to domain value objects: enum mapping (legacy status codes → domain enums), currency conversion, and ID translation (legacy numeric ids → domain UUIDs via a mapping table where identity must be preserved).\n- **Error mapping** — the adapter converts `SoapFault`, HTTP errors and PDO quirks into domain exceptions (`ErpUnavailable`, `OrderRejected`, `CustomerNotFound`); the domain never catches a legacy exception.\n\nKeep the translators dumb and exhaustively unit-tested — the corpus is blunt that mapping bugs are where integration projects actually fail."
+          }
+        },
+        {
+          "key": "ports-code",
+          "kind": "code",
+          "payload": {
+            "code": "// The port — written in the domain's language:\ninterface OrderGateway\n{\n    public function placeOrder(PlaceOrderRequest $order): PlaceOrderResult;\n}\n\n// Domain exceptions the adapter may throw — never \\SoapFault:\nfinal class ErpUnavailable extends \\RuntimeException {}\nfinal class OrderRejected   extends \\RuntimeException {}\n\n// AppServiceProvider::register() — the single swap point:\n$this->app->bind(OrderGateway::class, SoapLegacyOrderGateway::class);\n\n// When the ERP is replaced by a REST system, only this line changes:\n// $this->app->bind(OrderGateway::class, RestOrderGateway::class);",
+            "lang": "php",
+            "title": "Port, domain exceptions and the container rebinding"
+          }
+        },
+        {
+          "key": "soap-head",
+          "kind": "heading",
+          "title": "Inside the SOAP adapter"
+        },
+        {
+          "key": "soap-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The pragmatic transport baseline (from the corpus) is PHP's built-in `SoapClient` (ext-soap) pointed at the WSDL with sensible options: `connection_timeout` for establishing the connection, PHP's `default_socket_timeout` ini governing reads, and `cache_wsdl => WSDL_CACHE_NONE` while developing versus `WSDL_CACHE_BOTH` in production. You call `__soapCall($operation, $args)` and read typed members off the result. If the WSDL is large and the schema quirky, a typed SOAP client library removes the stringly-XML pain — for Symfony the corpus names the phpro/soap-client ecosystem, for plain PHP code generation from the WSDL. One ext-soap gap to remember: **no built-in WS-Security** — token/username headers are attached via `__setSoapHeaders(new SoapHeader(...))`."
+          }
+        },
+        {
+          "key": "soap-code",
+          "kind": "code",
+          "payload": {
+            "code": "$client = new SoapClient($erpWsdl, [\n    'connection_timeout' => 5,               // fail fast, don't hang checkout\n    'cache_wsdl'        => WSDL_CACHE_BOTH,  // parse the WSDL once in production\n]);\n\ntry {\n    $result = $client->__soapCall('placeOrder', [$payload]);\n} catch (\\SoapFault $e) {\n    // legacy faults become domain exceptions here — nowhere else\n    throw new ErpUnavailable('legacy ERP rejected the order: ' . $e->getMessage(), previous: $e);\n}",
+            "lang": "php",
+            "title": "Transport lives only inside the adapter"
+          }
+        },
+        {
+          "key": "soap-steps",
+          "kind": "steps",
+          "payload": {
+            "title": "One synchronous call, four responsibilities",
+            "steps": [
+              {
+                "title": "Translate the request outward",
+                "text": "The adapter maps domain ids, enums and dates into the ERP's vocabulary — a domain UUID becomes the legacy numeric id the WSDL expects.",
+                "state": "PlaceOrderRequest -> ERP payload"
+              },
+              {
+                "title": "Call with a tight timeout",
+                "text": "`__soapCall` runs within the configured connection/read timeouts; anything slower is a failure, not a hang.",
+                "state": "SOAP request sent"
+              },
+              {
+                "title": "Catch and map the fault",
+                "text": "A `SoapFault` is caught here and converted into a domain exception (`ErpUnavailable`, `OrderRejected`). The domain layer never sees it.",
+                "state": "SoapFault -> domain exception"
+              },
+              {
+                "title": "Translate the response inward",
+                "text": "The SOAP result's typed members become a `PlaceOrderResult` in domain language — status codes mapped to domain enums.",
+                "state": "ERP payload -> PlaceOrderResult"
+              }
+            ]
+          }
+        },
+        {
+          "key": "robust-head",
+          "kind": "heading",
+          "title": "Never hang checkout, never double-charge"
+        },
+        {
+          "key": "robust-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Legacy responses taking 2–10 seconds change the architecture, not just the timeout setting. The corpus's rule: **checkout should not call the ERP synchronously in the web request at all** — enqueue the operation (Laravel queue worker / Symfony Messenger async transport) and model checkout as a state machine updated by a webhook or a reconciliation worker. For any synchronous call that remains: tight timeouts, `SoapFault` mapped to domain exceptions, and a **circuit breaker** — a simple Redis failure counter that fails fast after N consecutive errors, so a dead ERP does not hang every checkout.\n\nIdempotency is enforced on your side because legacy SOAP endpoints usually are not idempotent: store a unique, client-generated order reference (your UUID) in the ERP payload field the vendor supports, persist it with a unique DB constraint, and after an ambiguous timeout run a **status/reconciliation query instead of blindly re-sending the order**. That is the at-most-once discipline from the defensive-contracts lesson, aimed the other way."
+          }
+        },
+        {
+          "key": "robust-why",
+          "kind": "callout",
+          "payload": {
+            "tone": "why",
+            "text": "The corpus names the three words an interviewer rewards hearing: **adapter/ACL seam, async + state machine, and idempotency via your own unique reference**. Say those three, then hang each design decision you discuss on one of them — the reviewer is checking that your integration is replaceable (seam), never blocks a user (async), and can survive an ambiguous timeout without corrupting money (idempotency).",
+            "title": "The three words that answer the whole question"
+          }
+        },
+        {
+          "key": "proof-head",
+          "kind": "heading",
+          "title": "Testing and contracts without the service"
+        },
+        {
+          "key": "proof-text",
+          "kind": "prose",
+          "payload": {
+            "text": "There is no test environment — so you prove the boundary in layers:\n\n- **Domain logic** is unit-tested against an in-memory/fake `OrderGateway`; because the domain only sees the interface, this is plain unit testing.\n- **The real adapter** is tested against recorded fixtures: capture actual request/response XML (or use VCR/WireMock-style replay) into **golden files** and assert mapping in both directions in CI.\n- Validate payloads against the **XSD** where the schema permits it.\n- With truly no test environment, run a **shadow period** logging real traffic to build fixtures.\n- The decisive test is the **adapter swap**: the domain runs against a fake or recorded fixtures of the adapter, proving it depends on the port alone.\n- Leak prevention is enforced by architecture, not discipline: dependency rules (Deptrac rules or a PHPStan custom rule) fail any use of the legacy client namespace outside the integration module, and the domain owns its own persistence — no foreign keys into legacy tables."
+          }
+        },
+        {
+          "key": "contracts-text",
+          "kind": "prose",
+          "payload": {
+            "text": "**Consumer-driven contract testing (Pact)** adds the CI-level guarantee. Each consumer runs its own tests against a mocked provider, generating a *pact file* describing the exact interactions it relies on — request path/method/headers and the response shape it parses. Those pacts are published, and the provider's pipeline replays the real provider code against every pact: a change that would break any known consumer fails the build before deployment. Its distinguishing value over staging E2E tests is that the expectations come from each consumer's **real usage** — including consumers whose code has never run in your staging environment, which only covers the paths you thought to exercise. Two caveats the quiz tests: pacts verify the boundary contract, they do not replace unit tests of business logic; and they enforce no versioning policy — their value is telling you *when* a change would break someone, at which point you decide to version, coordinate, or both. For genuine SOAP the contract lives in the WSDL/XSD, so the equivalents are XSD validation and WSDL diffing in CI."
+          }
+        },
+        {
+          "key": "coexist-head",
+          "kind": "heading",
+          "title": "Coexistence, then retirement"
+        },
+        {
+          "key": "coexist-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The module's scenario lesson puts the two transports in a hexagonal layout: `OrderController` (REST v2) and `OrderSoapEndpoint` (legacy SOAP) are **thin adapters in front of one shared application core** — the same services, translated at the boundary, so business logic can never drift into two different implementations. Fault mapping is explicit: SOAP `faultcode`/`faultstring` map to HTTP status codes plus an error payload, and recorded SOAP envelopes are replayed as contract tests so every refactor proves wire-level compatibility.\n\nVersioning treats both surfaces as first-class: REST clients get URI-prefixed versions (`/api/v2/orders`), while the SOAP contract's **WSDL is pinned and change-controlled** — any breaking edit follows the same rules as a REST version bump. Deprecation then reuses the versioning-lifecycle playbook: meter usage per client credential from day one, publish a concrete sunset date, emit a Sunset response header (plus a SOAP-side notice), and cut clients over one at a time behind a per-client flag — strangler-fig style, biggest client first, then smallest, while parity monitoring compares SOAP and REST behaviour. Remove the SOAP adapter only once the last client has migrated."
+          }
+        },
+        {
+          "key": "risks",
+          "kind": "callout",
+          "payload": {
+            "tone": "tip",
+            "text": "Name the risks before being asked: **hidden XML dependencies** (fields you forgot exist), **clients depending on quirks you 'fixed'**, **WSDL/schema drift**, and the temptation to **port legacy bugs** into the new core. The corpus's rule of thumb: document intended semantics instead of preserving accidents — and skip the whole ACL when the legacy system will outlive yours, because a boundary around a system that never dies is ceremony.",
+            "title": "The risk list that shows seniority"
+          }
+        }
+      ]
+    }
+  ]
+}

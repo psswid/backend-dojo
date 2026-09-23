@@ -51,6 +51,28 @@
           "Anti-patterns: do not cache secrets, already-cached state, volatile per-request data, or perfectly-fresh-required data; monitor the hit ratio"
         ]
       }
+    },
+    {
+      "type": "snippet",
+      "title": "parse_ttl: parse a TTL string into seconds",
+      "difficulty": "medium",
+      "tags": ["cache", "ttl", "parsing", "config"],
+      "description": "Implement parse_ttl(string $ttl): ?int. It converts a TTL string into a number of seconds. Accepted forms: a plain integer (seconds), or an integer followed by a unit letter s (seconds), m (minutes), h (hours) or d (days). Whitespace is trimmed; any other input returns null. Examples: parse_ttl('60') returns 60; parse_ttl('30s') returns 30; parse_ttl('5m') returns 300; parse_ttl('2h') returns 7200; parse_ttl('1d') returns 86400; parse_ttl('5x') returns null; parse_ttl('') returns null; parse_ttl('-5') returns null.",
+      "starter_code": "function parse_ttl(string $ttl): ?int\n{\n    // your code here\n}",
+      "test_suite": "expect('plain seconds', parse_ttl('60'), 60);\nexpect('seconds unit', parse_ttl('30s'), 30);\nexpect('minutes', parse_ttl('5m'), 300);\nexpect('hours', parse_ttl('2h'), 7200);\nexpect('days', parse_ttl('1d'), 86400);\nexpect('unknown unit', parse_ttl('5x'), null);\nexpect('empty', parse_ttl(''), null);\nexpect('negative', parse_ttl('-5'), null);\nexpect('whitespace trimmed', parse_ttl(' 10m '), 600);",
+      "solution": "function parse_ttl(string $ttl): ?int\n{\n    $ttl = trim($ttl);\n\n    if ($ttl === '') {\n        return null;\n    }\n\n    if (!preg_match('/^(\\d+)([smhd])?$/', $ttl, $m)) {\n        return null;\n    }\n\n    $n = (int) $m[1];\n    $unit = $m[2] ?? 's';\n    $mult = ['s' => 1, 'm' => 60, 'h' => 3600, 'd' => 86400];\n\n    return $n * $mult[$unit];\n}",
+      "rubric": null
+    },
+    {
+      "type": "debug",
+      "title": "parse_ttl treats days as hours",
+      "difficulty": "medium",
+      "tags": ["cache", "ttl", "parsing", "debugging"],
+      "description": "parse_ttl(string $ttl): ?int must convert units correctly: s=1, m=60, h=3600, d=86400. The broken version's unit table has 'd' mapped to 3600 (an hour) instead of 86400, so a TTL of '1d' returns 3600 seconds. Fix the day multiplier. Hint: one day is 24 * 60 * 60 seconds.",
+      "starter_code": "function parse_ttl(string $ttl): ?int\n{\n    $ttl = trim($ttl);\n    if ($ttl === '') {\n        return null;\n    }\n    if (!preg_match('/^(\\d+)([smhd])?$/', $ttl, $m)) {\n        return null;\n    }\n    $n = (int) $m[1];\n    $unit = $m[2] ?? 's';\n    $mult = ['s' => 1, 'm' => 60, 'h' => 3600, 'd' => 3600];\n    return $n * $mult[$unit];\n}",
+      "test_suite": "expect('days', parse_ttl('1d'), 86400);\nexpect('hours still correct', parse_ttl('2h'), 7200);\nexpect('minutes still correct', parse_ttl('5m'), 300);",
+      "solution": "function parse_ttl(string $ttl): ?int\n{\n    $ttl = trim($ttl);\n\n    if ($ttl === '') {\n        return null;\n    }\n\n    if (!preg_match('/^(\\d+)([smhd])?$/', $ttl, $m)) {\n        return null;\n    }\n\n    $n = (int) $m[1];\n    $unit = $m[2] ?? 's';\n    $mult = ['s' => 1, 'm' => 60, 'h' => 3600, 'd' => 86400];\n\n    return $n * $mult[$unit];\n}",
+      "rubric": null
     }
   ]
 }

@@ -1,0 +1,1239 @@
+{
+  "topic_slug": "caching-redis",
+  "lessons": [
+    {
+      "slug": "cache-placement-strategies",
+      "title": "Cache placement: cache-aside, write-through, write-behind",
+      "summary": "Caching interviews ask the same question in four costumes: when does a value get written to the cache, and by whom? Learn the four candidate strategies, what Cache::remember does under the hood, and why the write-heavy product-views counter needs write-behind instead.",
+      "minutes": 10,
+      "difficulty": "medium",
+      "tags": [
+        "caching",
+        "cache",
+        "cache-aside",
+        "write-through",
+        "write-behind",
+        "architecture",
+        "redis",
+        "laravel",
+        "symfony"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Half of every caching interview is the same question in disguise: **when is a value written to the cache, and who is allowed to write it?** The module's cache-aside quiz, its `Cache::remember` semantics question and the hard 5,000-views-per-second counter scenario all test exactly that. This lesson draws the four candidate answers — cache-aside, write-through, write-behind and pre-warming — so you can defend a choice instead of reciting names."
+          }
+        },
+        {
+          "key": "aside",
+          "kind": "heading",
+          "title": "Cache-aside: the reader fills the cache on a miss"
+        },
+        {
+          "key": "aside-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The **cache-aside** (lazy-loading) pattern makes the **application** the cache's only writer. On a read you call `Cache::get(key)`; on a miss you load the value from the database, store it with `Cache::put(key, value, ttl)`, and return it. The cache never populates itself, never notices that the underlying row changed, and never expires an entry beyond the TTL you gave it — invalidation is the application's job, which is why the module calls TTLs and explicit invalidation 'your responsibility'. Symfony expresses the same contract: `$pool->get($key, $callback)` runs the callback on a miss and stores its result."
+          }
+        },
+        {
+          "key": "aside-flow",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-flow\">\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-b\">read: products/12<span class=\"tag\">request</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-a\">Cache::get(key)<span class=\"tag\">cache lookup</span></span>\n  </div>\n  <div class=\"ld-col\"><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-dim\">miss<span class=\"tag\">no value stored</span></span>\n  </div>\n  <div class=\"ld-col\"><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-c\">SELECT row<span class=\"tag\">MySQL</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-b\">Cache::put(key, row, ttl)<span class=\"tag\">application writes</span></span>\n  </div>\n  <div class=\"ld-col\"><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-a\">return row<span class=\"tag\">serve</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-dim\">later reads hit<span class=\"tag\">until TTL or invalidation</span></span>\n  </div>\n</div>",
+            "title": "The cache-aside read path: the miss that repopulates the cache",
+            "caption": "The write happens in the application, on a miss — never automatically inside the store. Later reads hit until a TTL expires or the app invalidates the key."
+          }
+        },
+        {
+          "key": "remember-code",
+          "kind": "code",
+          "payload": {
+            "code": "$summary = Cache::remember('dashboard:summary', 600, fn () => $this->expensiveReport());\n\n// the same thing, spelled out — cache-aside in three lines:\n$summary = Cache::get('dashboard:summary');\n\nif ($summary === null) {\n    $summary = $this->expensiveReport();\n    Cache::put('dashboard:summary', $summary, 600);\n}",
+            "lang": "php",
+            "title": "Cache::remember is get-or-compute sugar"
+          }
+        },
+        {
+          "key": "remember-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "First call: the key does not exist",
+                "text": "`Cache::remember` looks the key up, finds nothing, and does **not** throw, block or defer to a background process. It runs your closure right here.",
+                "state": "closure runs now"
+              },
+              {
+                "title": "The result is stored and returned",
+                "text": "The closure's return value is written with `Cache::put(key, $value, 600)` — a 600-second TTL — and then returned to the caller in the same call.",
+                "state": "put + return in one call"
+              },
+              {
+                "title": "Every later call inside the window",
+                "text": "The key exists, `Cache::get` returns the value, and the closure is skipped. Nothing recomputes until the TTL expires or the app forgets the key.",
+                "state": "hit — closure skipped"
+              },
+              {
+                "title": "Two senior caveats",
+                "text": "The miss path is **not serialized**: 50 concurrent requests missing at the same instant may all run the expensive closure — that is the seed of a cache stampede. And `rememberForever` means the entry never expires, so invalidation must be explicit or the data can go stale forever.",
+                "state": "stampede seed + forever-stale trap"
+              }
+            ],
+            "title": "What happens the very first time 'dashboard:summary' is read",
+            "intro": "The quiz asks precisely this. Walk it once and the answer is mechanical:"
+          }
+        },
+        {
+          "key": "shared",
+          "kind": "heading",
+          "title": "Where the cache lives: one shared store"
+        },
+        {
+          "key": "shared-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The store you pick matters as much as the pattern. The **file** driver keeps every value in a local file tree on the machine that wrote it — perfect for a single server or local development. Behind a load balancer that means server A fills the cache and servers B and C still miss: hit rate collapses, sessions silently drop, per-instance counters disagree, and per-node stores make stampedes worse. The fix is a shared store: set `CACHE_STORE=redis` (or the database driver as a fallback) so all instances read and write the same data and can run distributed atomic locks and rate-limit counters. Symfony tells the same story: the filesystem adapter is local per host, while `RedisAdapter` gives the fleet one logical cache. This also matters during rolling deploys — clearing `cache:clear` one node at a time while others still serve traffic briefly hurts, whatever store you chose."
+          }
+        },
+        {
+          "key": "strategies",
+          "kind": "heading",
+          "title": "The three write-side strategies"
+        },
+        {
+          "key": "strategies-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Cache-aside keeps reads fast but never writes on the data path — that is what the other strategies add. **Write-through** mirrors every database write to the cache synchronously, at write time: stronger read-after-write consistency, but the write path pays cache latency and you store values nobody may ever read. **Write-behind / write-back** does the same mirroring asynchronously — write Redis immediately, flush to MySQL via a queued job. The fourth option, **pre-warming**, fills the cache on a schedule: useful for known-heavy keys, but never a substitute for a read path that can populate itself."
+          }
+        },
+        {
+          "key": "strategy-table",
+          "kind": "table",
+          "payload": {
+            "title": "Choosing a placement strategy",
+            "headers": [
+              "Strategy",
+              "Who fills the cache",
+              "Freshness story",
+              "Write-path cost",
+              "Best fit"
+            ],
+            "rows": [
+              [
+                "Cache-aside (lazy)",
+                "the reader, on a miss",
+                "fresh until the app invalidates or the TTL expires",
+                "cheap: `Cache::forget` or a version bump on writes",
+                "read-heavy, write-light — the default"
+              ],
+              [
+                "Write-through",
+                "every writer, synchronously",
+                "strong read-after-write: the cache mirrors each DB write",
+                "one extra cache write per DB write",
+                "reads after writes must be immediately consistent"
+              ],
+              [
+                "Write-behind (write-back)",
+                "the writer or a drain job, asynchronously",
+                "eventually consistent; reads can lag by the drain interval",
+                "cheap (Redis INCR/SET); the DB flush is background",
+                "write-heavy counters where MySQL is the bottleneck"
+              ],
+              [
+                "Pre-warming",
+                "a scheduled job, ahead of time",
+                "bounded by the warm schedule; can drift from the DB",
+                "none (background)",
+                "known-heavy keys at known times — never the only mechanism"
+              ]
+            ],
+            "note": "The module's cache-aside question asks exactly when the value is written: with cache-aside it is the application, on a cache miss. Pre-warming (option 4 in the quiz) is a separate pattern, not cache-aside.",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "counters",
+          "kind": "heading",
+          "title": "Put it to work: the write-heavy product-views counter"
+        },
+        {
+          "key": "counter-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The module's hardest placement question is deliberately **not** a read cache. A per-product 'views today' counter is write-heavy, so the right pattern is write-behind with Redis as the system of record for the counter: every view is one atomic `INCR` on a per-product, per-day bucket, with a TTL so stale buckets self-expire, and a scheduled drain job pushes deltas to MySQL. Redis absorbs 5,000 atomic increments per second where a synchronous MySQL `UPDATE` per view is exactly the bottleneck you are avoiding. Defend the consequences out loud: durability is bounded by Redis persistence **plus** the drain interval (a crash can lose recent counts — mitigate with AOF or accept analytics-grade numbers), and consistency is eventually consistent — the dashboard lags by seconds, so you must not promise read-your-own-write."
+          }
+        },
+        {
+          "key": "counter-code",
+          "kind": "code",
+          "payload": {
+            "code": "// write path: one atomic INCR per view — key = product + day, TTL so buckets die\n$bucket = 'views:product:12:2026-06-01';\n$count  = Redis::incr($bucket);\n\nif ($count === 1) {\n    Redis::expire($bucket, 60 * 60 * 26);   // stale buckets self-expire\n    Redis::sadd('views:pending', 12);       // product now has unsynced views\n}\n\n// drain job (scheduler / queue): push each product's delta to MySQL once.\n// Storing the last-flushed value next to the count makes the flush idempotent.\nforeach (Redis::smembers('views:pending') as $productId) {\n    $key     = 'views:product:' . $productId . ':' . date('Y-m-d');\n    $current = (int) Redis::get($key);\n    $flushed = (int) Redis::get($key . ':flushed');\n    $delta   = $current - $flushed;\n\n    if ($delta > 0) {\n        DB::table('product_views')\n            ->where('product_id', (int) $productId)\n            ->increment('views', $delta);\n\n        Redis::set($key . ':flushed', $current);\n        Redis::expire($key . ':flushed', 60 * 60 * 26);  // same clock as the bucket\n    }\n\n    if ($delta === 0 && $current === 0) {\n        Redis::srem('views:pending', $productId);        // nothing left to flush\n    }\n}",
+            "lang": "php",
+            "title": "Write-behind: INCR into Redis, drain the delta into MySQL"
+          }
+        },
+        {
+          "key": "counter-why",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "Why not the other strategies for a counter?",
+            "text": "Cache-aside is wrong for counters twice over: the first read of the day caches a value that has already started diverging, and a GET-modify-SET update races, losing increments. The moment you 'fix' it with `INCR` you are no longer doing cache-aside — you are using Redis as a counter. Write-through would synchronously update MySQL per view, which is the bottleneck itself; it is only worth its cost when reads-after-writes must be immediately consistent (cart totals, account balances). Make each drain flush **idempotent**: store the last-flushed value, or guard the read-delta-write with a per-product lock, so two drains never double-count."
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Now take the scenario task — 'design caching for a hot, read-mostly product endpoint' — with this lens: reads dwarf writes, so choose **cache-aside**; make the TTL a short safety net (5–10 minutes for product data) rather than the correctness mechanism; invalidate explicitly on the write path; and protect the rebuild with a lock. The TTL/invalidation layer is the next lesson; the stampede guard is the one after that."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "ttl-invalidation-versioned-keys",
+      "title": "TTLs, invalidation, and cache keys that stay sane",
+      "summary": "A TTL bounds staleness; explicit invalidation removes it; sane key names make both possible at scale. Walk forget-on-the-write-path, versioned namespaced keys, cache tags, and the parse_ttl and cache_key drills behind this module's invalidation question.",
+      "minutes": 12,
+      "difficulty": "medium",
+      "tags": [
+        "caching",
+        "cache",
+        "invalidation",
+        "ttl",
+        "tags",
+        "versioning",
+        "cache-key",
+        "deterministic",
+        "parsing",
+        "config",
+        "debugging",
+        "laravel",
+        "symfony",
+        "redis",
+        "architecture"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "There are only two hard things in computer science: cache invalidation and naming things. This module takes the quote literally — one open scenario about a product price edit, a hard quiz on cache tags, plus a `cache_key` builder task and a `parse_ttl` task. The thread connecting them: TTLs bound staleness, explicit invalidation makes it disappear, and sane key names are what make either possible at scale."
+          }
+        },
+        {
+          "key": "ttl-role",
+          "kind": "heading",
+          "title": "A TTL is a bounded-staleness backstop, not a correctness mechanism"
+        },
+        {
+          "key": "ttl-text",
+          "kind": "prose",
+          "payload": {
+            "text": "A TTL guarantees one thing: an entry **will** disappear on its own, bounding how long stale data can survive. That is its real job — even a correct explicit flush should be paired with a short TTL (minutes, not hours) so nothing is stale forever when a code path is missed. TTL-only expiry is simpler and self-healing, but gives you no write-time control: with a 15-minute TTL on product detail pages you accept up to 15 minutes of a wrong price. That trade-off is what the module's open scenario makes you articulate."
+          }
+        },
+        {
+          "key": "parse-code",
+          "kind": "code",
+          "payload": {
+            "code": "function parse_ttl(string $ttl): ?int\n{\n    $ttl = trim($ttl);\n\n    if ($ttl === '') {\n        return null;\n    }\n\n    if (! preg_match('/^(\\d+)([smhd])?$/', $ttl, $m)) {\n        return null;\n    }\n\n    $n    = (int) $m[1];\n    $unit = $m[2] ?? 's';\n    $mult = ['s' => 1, 'm' => 60, 'h' => 3600, 'd' => 86400];\n\n    return $n * $mult[$unit];\n}\n\n// parse_ttl('60')   => 60\n// parse_ttl('30s')  => 30\n// parse_ttl('5m')   => 300\n// parse_ttl('2h')   => 7200\n// parse_ttl('1d')   => 86400\n// parse_ttl('5x') / parse_ttl('') / parse_ttl('-5') => null",
+            "lang": "php",
+            "title": "parse_ttl: config strings like '5m' into seconds"
+          }
+        },
+        {
+          "key": "parse-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "Normalise and shape-check",
+                "text": "Trim whitespace, so `' 10m '` is valid, and reject anything that is not one or more digits optionally followed by a single unit letter — empty input included.",
+                "state": "' 10m ' → '10m'"
+              },
+              {
+                "title": "Default unit is seconds",
+                "text": "No suffix means plain seconds: `'60'` returns 60. The second regex group is optional and defaults to `s`.",
+                "state": "'60' → 60"
+              },
+              {
+                "title": "Multiply by the unit table",
+                "text": "`s` × 1, `m` × 60, `h` × 3600, `d` × 86400 — the multiplier map is the entire 'config' content of the task. The debug twin plants `'d' => 3600`, so `parse_ttl('1d')` returns 3600 instead of 86400; the fix is the correct map, nothing else.",
+                "state": "'5m' → 300 · '2h' → 7200 · '1d' → 86400"
+              },
+              {
+                "title": "Everything else is null",
+                "text": "Unknown units (`'5x'`), negatives (`'-5'`) and empty input are configuration errors, not values to guess at — return `null`.",
+                "state": "invalid → null"
+              }
+            ],
+            "title": "How parse_ttl reads a config value",
+            "intro": "TTLs arrive from config as strings; the task normalises them to seconds. The states below were verified by running this exact function:"
+          }
+        },
+        {
+          "key": "forget",
+          "kind": "heading",
+          "title": "Explicit invalidation: forget on the write path"
+        },
+        {
+          "key": "invalidate-code",
+          "kind": "code",
+          "payload": {
+            "code": "// wherever the price can change — controller, service, or an event\n// listener such as Product::updated or ProductPriceChanged:\n\nCache::forget('product:12:detail');\nCache::forget('product:12:price');",
+            "lang": "php",
+            "title": "Delete exactly the affected keys; the next read rebuilds lazily"
+          }
+        },
+        {
+          "key": "invalidate-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Explicit invalidation means 'delete the affected keys when the data changes' — immediate consistency, no stale data. Its cost is coupling: every writer must know the readers' key names. A misspelled prefix, or a write that bypasses the code path (raw SQL, an admin tool, a queue job, another service), silently leaves stale data. That is why the model answer pairs a correct flush with a short TTL as the bounded-staleness backstop, and why the key-naming contract below is not cosmetics."
+          }
+        },
+        {
+          "key": "keys",
+          "kind": "heading",
+          "title": "Key naming at scale: namespace, version, parts"
+        },
+        {
+          "key": "keys-text",
+          "kind": "prose",
+          "payload": {
+            "text": "A naming contract is what makes invalidation possible: one shared key-builder used by every reader and writer, a namespace prefix, and a **version** baked into the key — `product:12:detail:v20260601123000` or a per-resource `products:v3`. A version bump makes the whole old class of keys unreachable in a single operation and the next read builds fresh ones: no scan-and-delete, no tag bookkeeping, and it plays well when several services share data — each service bumps its own version. Bake versions into keys when the cached shape can change across deploys; forget on the write path for hot, important data."
+          }
+        },
+        {
+          "key": "key-code",
+          "kind": "code",
+          "payload": {
+            "code": "function cache_key(string $resource, int $version, array $parts): string\n{\n    sort($parts, SORT_STRING);              // deterministic: same set => same key\n\n    $key = 'cache:' . $resource . ':v' . $version;\n\n    foreach ($parts as $part) {\n        $key .= ':' . $part;\n    }\n\n    return $key;\n}\n\n// cache_key('articles', 2, ['42', 'en']) => 'cache:articles:v2:42:en'\n// cache_key('articles', 2, ['en', '42']) => 'cache:articles:v2:42:en'  (order-independent)\n// cache_key('articles', 3, ['en', '42']) => 'cache:articles:v3:42:en'  (bump = whole class gone)\n// cache_key('users', 1, [])               => 'cache:users:v1'",
+            "lang": "php",
+            "title": "cache_key: a deterministic, namespaced, versioned key builder"
+          }
+        },
+        {
+          "key": "key-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "Deterministic does not mean numeric",
+            "text": "The task sorts parts with `SORT_STRING`, a plain lexicographic sort: `['10', '9']` comes out as `10, 9` because `'1' < '9'`. The default `sort()` would compare numeric strings as numbers and give `9, 10` — same set, different key. Either flag is fine as long as **every caller uses the same one**; the bug to fear is one writer sorting with `SORT_STRING` and another with the default flags, because the same parts then produce two different keys and invalidation misses half the entries."
+          }
+        },
+        {
+          "key": "tags",
+          "kind": "heading",
+          "title": "Cache tags: group invalidation"
+        },
+        {
+          "key": "tags-text",
+          "kind": "prose",
+          "payload": {
+            "text": "When several keys belong to one resource — product 12's detail, price and stock — remembering each key to forget is fragile. Tags let you flush the group: `Cache::tags(['product-12'])->flush()` removes every entry tagged `product-12`, whatever its key. The cost is bookkeeping: Laravel records each tag's membership (a set of the real key names) and a flush deletes the member keys plus the tag sets in several round trips that are **not atomic** — an entry written by a concurrent `remember()` can survive a flush, or slip in after the membership was read and never be flushed. Tags are also driver-dependent: supported on Redis, database, memcached and array stores, and explicitly **not** on file or DynamoDB."
+          }
+        },
+        {
+          "key": "tags-code",
+          "kind": "code",
+          "payload": {
+            "code": "// write several entries under one tag set:\nCache::tags(['product', 'product-12'])->remember(\n    'product:12:detail', 3600, fn () => $this->loadDetail(12)\n);\nCache::tags(['product', 'product-12'])->remember(\n    'product:12:price', 300, fn () => $this->loadPrice(12)\n);\n\n// a price edit invalidates every entry tagged product-12:\nCache::tags(['product-12'])->flush();",
+            "lang": "php",
+            "title": "Tagged remember, then a targeted tag flush"
+          }
+        },
+        {
+          "key": "tags-table",
+          "kind": "table",
+          "payload": {
+            "title": "Three ways to invalidate a group of keys",
+            "headers": [
+              "Approach",
+              "How invalidation happens",
+              "Cost & atomicity",
+              "Use when"
+            ],
+            "rows": [
+              [
+                "Laravel cache tags",
+                "per-tag sets of real key names; flush deletes the members, then the tag sets",
+                "several round trips, not atomic against a concurrent writer",
+                "broad groups on redis / database / memcached / array stores"
+              ],
+              [
+                "Versioned keys",
+                "bump `:vN` (or a timestamp) in the key — old keys become unreachable",
+                "one INCR/SET per bump; readers pay one cheap version read",
+                "hot paths and multi-service sharing; no bookkeeping at all"
+              ],
+              [
+                "Symfony TagAwareAdapter",
+                "a per-tag version baked into internal keys; invalidateTags() bumps it",
+                "cheap, near-atomic version bump; no key enumeration",
+                "Symfony pools with Redis or database storage"
+              ]
+            ],
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Now the module's drills read as one system: `cache_key` builds the names every invalidation targets, `parse_ttl` turns the config's `'5m'` into the TTL that bounds staleness, and the debug twins teach you to verify a key builder and a unit table instead of hoping. When an interviewer asks about invalidation, answer with the naming contract first — you cannot invalidate what you cannot name."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "cache-failure-modes-stampede",
+      "title": "Penetration, breakdown, avalanche — and the stampede guard",
+      "summary": "Cache failure modes get confused because they all end with the database seeing too many requests. Learn to separate penetration, hotspot breakdown and avalanche, then build the lock-based stampede guard and the should_recompute decision table.",
+      "minutes": 11,
+      "difficulty": "medium",
+      "tags": [
+        "caching",
+        "cache",
+        "redis",
+        "concurrency",
+        "failure-modes",
+        "stampede",
+        "lock",
+        "race-condition",
+        "architecture",
+        "laravel",
+        "symfony"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Cache failure modes get confused because they all end the same way: 'the database suddenly sees too many requests'. But penetration, breakdown and avalanche have **different causes and different fixes**, and interviewers explicitly test the separation — the module's multi-select quiz does. The same family contains the stampede: one hot key expires and every concurrent request races to rebuild it, which is what the `should_recompute` debug task and the scenario task's lock-based guard are about."
+          }
+        },
+        {
+          "key": "modes",
+          "kind": "heading",
+          "title": "Three failure modes, three mechanisms"
+        },
+        {
+          "key": "modes-table",
+          "kind": "table",
+          "payload": {
+            "title": "Penetration vs breakdown vs avalanche",
+            "headers": [
+              "Mode",
+              "What happens",
+              "Typical trigger",
+              "Mitigations"
+            ],
+            "rows": [
+              [
+                "Penetration",
+                "requests for keys that can never be cached — nothing exists behind them in the cache **or** the database (random ids, deleted rows), so every request falls through to the DB",
+                "probes with random ids; lookups of absent rows",
+                "validate ids up front; cache the negative result for a short TTL (a sentinel — see below); a Bloom filter over existing ids"
+              ],
+              [
+                "Breakdown (hotspot)",
+                "one extremely hot key expires under load and many concurrent requests all try to rebuild it at once — a thundering herd",
+                "a single popular entry's TTL hits zero at peak traffic",
+                "atomic lock around the rebuild (double-checked locking); no-expiry plus background refresh for the hottest keys; a small in-process layer in front of Redis"
+              ],
+              [
+                "Avalanche",
+                "many keys die in the same instant and the cache empties at once",
+                "uniform TTLs (everything set to 3600 s expires in the same second); a mass restart after a deploy; a Redis restart",
+                "TTL jitter — 3600 + random(0, 300); staggered warm-up; Symfony cache warmers or a Laravel re-warm job after deploys"
+              ]
+            ],
+            "note": "The quiz traps are the mislabels: a Redis restart wiping everything is an avalanche trigger, not a breakdown; an attacker hammering thousands of nonexistent ids is penetration, not an avalanche.",
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "modes-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Keep the names tied to the mechanism: **penetration** = keys with nothing behind them; **breakdown** = one hot key expiring under load; **avalanche** = many keys dying at once. The same question asks for a concrete mitigation per mode — the table above is the model answer."
+          }
+        },
+        {
+          "key": "negative-code",
+          "kind": "code",
+          "payload": {
+            "code": "// penetration: absorb lookups of ids that do not exist\n$id  = (int) $request->query('id');\n$key = 'product:' . $id . ':exists';\n$hit = Cache::get($key);\n\nif ($hit === null) {\n    $hit = DB::table('products')->where('id', $id)->exists();\n    Cache::put($key, $hit, 60);          // false is cached too — for 60 seconds\n}\n\nif (! $hit) {\n    abort(404);\n}",
+            "lang": "php",
+            "title": "Negative caching with a boolean sentinel"
+          }
+        },
+        {
+          "key": "negative-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "Do not cache null for negative results",
+            "text": "`Cache::remember` treats a stored `null` exactly like a miss — the value comes back `null` and the closure runs again, so a null entry absorbs nothing. Cache a boolean or another sentinel for negative results, as above; the module's answer calls this 'a small sentinel value so the miss is absorbed'."
+          }
+        },
+        {
+          "key": "stampede",
+          "kind": "heading",
+          "title": "The stampede: one winner rebuilds"
+        },
+        {
+          "key": "stampede-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Take the quiz scenario: `/reports/summary` receives 50 requests per second, the summary takes about two seconds to compute, and the cached value expires at midnight — every concurrent request misses at once, so many processes each start recomputing. The fix is a distributed lock around the rebuild so exactly **one** request wins. `Cache::lock(name, seconds)` is backed by Redis `SET ... NX` with an expiry, so acquisition is atomic across app instances."
+          }
+        },
+        {
+          "key": "guard-code",
+          "kind": "code",
+          "payload": {
+            "code": "function rebuild_report(string $key): array\n{\n    $lock = Cache::lock($key, 10);\n\n    if (! $lock->get()) {\n        // We lost the race: wait briefly for the winner instead of recomputing.\n        $value = Cache::lock($key, 10)->block(3, fn () => compute_and_cache($key));\n\n        return $value !== false ? $value : stale_report();\n    }\n\n    try {\n        // Double-checked locking: the winner may have stored it while we queued.\n        $value = Cache::get($key);\n\n        if ($value === null) {\n            $value = expensive_report();\n            Cache::put($key, $value, 600);\n        }\n\n        return $value;\n    } finally {\n        $lock->release();\n    }\n}",
+            "lang": "php",
+            "title": "Stampede guard: acquire, re-check, recompute only if still missing, always release"
+          }
+        },
+        {
+          "key": "recompute-table",
+          "kind": "table",
+          "payload": {
+            "title": "should_recompute: all four states, buggy vs fixed",
+            "headers": [
+              "cacheHit",
+              "holdsLock",
+              "buggy returns",
+              "fixed returns",
+              "What the correct call does"
+            ],
+            "rows": [
+              [
+                "true",
+                "false",
+                "true",
+                "false",
+                "hit: serve the cache — never recompute"
+              ],
+              [
+                "true",
+                "true",
+                "true",
+                "false",
+                "hit even under the lock: someone else rebuilt while we waited — read it"
+              ],
+              [
+                "false",
+                "false",
+                "true",
+                "false",
+                "miss without the lock: lost the race — wait/block and re-read"
+              ],
+              [
+                "false",
+                "true",
+                "false",
+                "true",
+                "miss with the lock: the single winner — recompute exactly once"
+              ]
+            ],
+            "note": "Values verified by executing both functions: the buggy `return $cacheHit || !$holdsLock;` returns true for the first three rows — wasted queries on hits and a stampede of simultaneous recomputes from lock losers. The fix is one flip to `!$cacheHit && $holdsLock`.",
+            "mono": [
+              0,
+              1
+            ]
+          }
+        },
+        {
+          "key": "recompute-fix",
+          "kind": "code",
+          "payload": {
+            "code": "function should_recompute(bool $cacheHit, bool $holdsLock): bool\n{\n    return ! $cacheHit && $holdsLock;   // miss AND lock held -> recompute once\n}",
+            "lang": "php",
+            "title": "The whole debug task is one boolean operator"
+          }
+        },
+        {
+          "key": "avalanche-defense",
+          "kind": "heading",
+          "title": "Avalanche defenses: jitter, warm-up, refresh-ahead"
+        },
+        {
+          "key": "avalanche-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The quiz's expiry numbers are uniform — everything cached with the same 3600 seconds expires in the same second — so the classic defense is **jitter**: `$ttl = 3600 + random_int(0, 300);`. Pair it with staggered warm-up after deploys (Symfony cache warmers, or a Laravel re-warm job), and consider refresh-ahead for keys that must never go cold: a scheduled job re-warms a key shortly before it expires instead of letting traffic discover the expiry. `rememberForever` plus a background refresh is the same idea for the single hottest keys — the breakdown case — with the standing rule that forever-stale data needs explicit invalidation."
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "The scenario task's sections 3 and 4 are this lesson compressed: penetration → negative caching or a Bloom filter; breakdown → never let the single hottest key expire cold; avalanche → jitter the TTLs; and the stampede → the lock guard above, where losers `block()` briefly and re-read, with a stale-while-revalidate fallback beating a 502. Run the `should_recompute` drill until the four-row table is automatic — then you can explain why a cache HIT must never recompute, even when you hold the lock."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "redis-data-structures",
+      "title": "Choosing the right Redis data structure",
+      "summary": "Two quiz questions, one skill: match the Redis structure to the problem. Learn the five structures and their operations, then apply them to partial profile updates, moving leaderboard scores, and per-bucket counters — and know when the Laravel Cache facade is not enough.",
+      "minutes": 8,
+      "difficulty": "medium",
+      "tags": [
+        "redis",
+        "data-structures",
+        "rate-limiting",
+        "caching",
+        "laravel",
+        "symfony"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Two quiz questions in this module are really one: **which Redis structure fits which problem?** A senior is expected to rattle off the five structures and their operations, and then apply them — a profile field that changes every few seconds, a leaderboard whose scores move, a per-minute counter. This lesson builds the cheat sheet and draws the line that decides whether you use the Cache facade or raw Redis."
+          }
+        },
+        {
+          "key": "contracts",
+          "kind": "heading",
+          "title": "Five structures, five contracts"
+        },
+        {
+          "key": "contracts-table",
+          "kind": "table",
+          "payload": {
+            "title": "The one-sentence guide a senior should rattle off",
+            "headers": [
+              "Structure",
+              "What it holds",
+              "Key operations",
+              "Classic use"
+            ],
+            "rows": [
+              [
+                "STRING",
+                "one scalar value (or bytes)",
+                "GET / SET, INCR / DECR, EXPIRE",
+                "simple values, cache entries, atomic counters"
+              ],
+              [
+                "HASH",
+                "a record as many fields",
+                "HSET / HGET / HDEL (O(1) per field), HMGET",
+                "objects with mutable fields — partial updates"
+              ],
+              [
+                "LIST",
+                "an ordered sequence of items",
+                "LPUSH / RPUSH, LPOP / BRPOP",
+                "queues, ordered collections"
+              ],
+              [
+                "SET",
+                "unique members",
+                "SADD, SISMEMBER, SINTER / SUNION",
+                "membership, dedup, tag algebra"
+              ],
+              [
+                "SORTED SET",
+                "unique members with a score",
+                "ZADD (O(log n) update), ZREVRANGE, ZCARD",
+                "leaderboards, rankings, time-ordered queues (score = timestamp)"
+              ]
+            ],
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "hash-case",
+          "kind": "heading",
+          "title": "Case study 1: one mutable field in a record — HASH"
+        },
+        {
+          "key": "hash-text",
+          "kind": "prose",
+          "payload": {
+            "text": "A user profile is read often, but its `last_seen` field changes every few seconds. A HASH maps the record to many fields and lets you touch **one** of them: `HSET`, `HGET` and `HDEL` are O(1) single-field operations, and `HMGET` reads just the fields you need. Compare a STRING holding the whole profile as JSON: every update is a GET-modify-SET of the full payload, two concurrent processes can overwrite each other (lost updates), and you rewrite bytes that did not change. The STRING only wins when the value is always consumed whole and never partially mutated — then it is simpler and perfectly fine."
+          }
+        },
+        {
+          "key": "hash-code",
+          "kind": "code",
+          "payload": {
+            "code": "// raw Redis — Redis facade, phpredis or predis\nRedis::hset('user:7:profile', 'last_seen', $now);   // one field, one write\nRedis::hset('user:7:profile', 'name', 'Ada');       // the rest of the record untouched\n\n$name = Redis::hget('user:7:profile', 'name');      // read only what you need\n$row  = Redis::hgetall('user:7:profile');           // or the whole record",
+            "lang": "php",
+            "title": "HASH: partial updates without a GET-modify-SET race"
+          }
+        },
+        {
+          "key": "hash-trap",
+          "kind": "prose",
+          "payload": {
+            "text": "Two hash caveats worth stating in an interview: the TTL applies to the **whole key**, not per field — per-field expiry (`HEXPIRE`) only arrived in Redis 7.4 — and the Cache facade cannot express hashes at all, which is the last section of this lesson."
+          }
+        },
+        {
+          "key": "zset-case",
+          "kind": "heading",
+          "title": "Case study 2: scores that change — SORTED SET, not LIST"
+        },
+        {
+          "key": "zset-text",
+          "kind": "prose",
+          "payload": {
+            "text": "A leaderboard is a SORTED SET: `ZADD` inserts a member or updates its score in O(log n), and `ZREVRANGE` gives you the top N. A LIST is for ordered collections you push to and pop from — it cannot re-rank. A SET cannot count occurrences either (it deduplicates); counting occurrences needs INCR counters or a hash of counters."
+          }
+        },
+        {
+          "key": "zset-code",
+          "kind": "code",
+          "payload": {
+            "code": "Redis::zadd('leaderboard:weekly', 450, 'user:7');            // insert\nRedis::zadd('leaderboard:weekly', 520, 'user:7');            // same member, new score\n$top = Redis::zrevrange('leaderboard:weekly', 0, 9, true);   // top 10, with scores",
+            "lang": "php",
+            "title": "SORTED SET: scores move, ranking follows"
+          }
+        },
+        {
+          "key": "bucket-case",
+          "kind": "heading",
+          "title": "Case study 3: a counter that resets at a boundary — STRING + INCR"
+        },
+        {
+          "key": "bucket-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The canonical fixed-window rate counter is a plain STRING under a key that encodes the bucket — `rate:user:7:20260601-1015` — because `INCR` is atomic and returns the new count, and `EXPIRE` lets the bucket die so inactive users do not accumulate keys. Full implementations, and why a fixed window still lets 2×N requests through at the boundary, live in the rate-limiting lesson; here the point is the structure choice: a scalar, atomic counter with one key per time bucket."
+          }
+        },
+        {
+          "key": "facade-split",
+          "kind": "heading",
+          "title": "The Laravel split: Cache facade vs raw Redis"
+        },
+        {
+          "key": "facade-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The Cache facade is **value-oriented**: it stores single serialized values and layers `remember`, tags and locks on top — ideal for cache-aside entries. It has no notion of a hash field, a set member or a sorted-set score, and neither does Symfony's `RedisAdapter`, which is equally plain key-value. True structure semantics require dropping to the raw client — the Redis facade, phpredis or predis — which is exactly why the module's profile question is answered with `Redis::hset(...)`, not `Cache::put(...)`."
+          }
+        },
+        {
+          "key": "facade-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "Pick one owner per logical value",
+            "text": "Keys written through the cache store live in its own namespaced area, so `Cache::forget`, `Cache::tags` and `flush` only ever manage values written through the facade — a hash you created with `Redis::hset` is invisible to them. Keep cache-aside entries in the facade and raw structures on dedicated raw keys; do not interleave `Cache::put` and `Redis::hset` for the same value."
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "Interview echo: STRING for scalars and counters, HASH for records you update field by field, LIST for ordered queues, SET for membership and set algebra, SORTED SET for rankings and time-ordered scores where the score is a timestamp. Deliver it like a table and you have already answered both structure questions — the remaining discussion is the whole-key TTL caveat and knowing when the Cache facade is not enough."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "redis-rate-limiting",
+      "title": "Rate limiting with Redis: fixed, sliding, token bucket",
+      "summary": "Rate-limit counters must be shared across instances and atomic, which is Redis's home turf. Walk the fixed-window boundary flaw, the exact sliding-window log, token buckets, and where Laravel's built-in limiter and Symfony's policies sit.",
+      "minutes": 10,
+      "difficulty": "medium",
+      "tags": [
+        "redis",
+        "rate-limiting",
+        "caching",
+        "cache",
+        "laravel",
+        "symfony",
+        "concurrency"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Rate limiting is where Redis earns its keep: the counters must be shared across every app instance and the increments must be atomic. The module's question walks the exact failure of a naive fixed window — 120 requests in two consecutive seconds around a minute boundary — and compares the strict algorithms with Laravel's built-in limiter and Symfony's explicit policies. This lesson makes each algorithm's Redis shape concrete."
+          }
+        },
+        {
+          "key": "fixed",
+          "kind": "heading",
+          "title": "Fixed window: simple, and bursty at the boundary"
+        },
+        {
+          "key": "fixed-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The naive design — one counter per user per clock minute — lets a user send 60 requests in 09:59:00–09:59:59 and another 60 in 10:00:00–10:00:59: **up to 120 requests in two consecutive seconds** around the boundary. Lowering the TTL, keeping one never-expiring counter and dividing by elapsed time, or raising the limit to 120 does not fix it; the flaw is structural — the window is aligned to the clock, not to the traffic."
+          }
+        },
+        {
+          "key": "fixed-code",
+          "kind": "code",
+          "payload": {
+            "code": "// one key per (user, minute): INCR is atomic and returns the new count\n$key  = 'rate:user:7:20260601-1015';\n$hits = Redis::incr($key);\n\nif ($hits === 1) {\n    Redis::expire($key, 120);          // first hit of the bucket arms its TTL\n}\n\nif ($hits > 60) {\n    abort(429, 'Too many requests');   // 60 requests / user / minute exceeded\n}",
+            "lang": "php",
+            "title": "Fixed window on Redis: one STRING counter per bucket"
+          }
+        },
+        {
+          "key": "sliding",
+          "kind": "heading",
+          "title": "Sliding window: exact trailing-window accounting"
+        },
+        {
+          "key": "sliding-text",
+          "kind": "prose",
+          "payload": {
+            "text": "A true sliding window counts hits over the **trailing** 60 seconds, so there is no boundary to game. The exact form keeps every hit's timestamp in a Redis SORTED SET: record the hit (`ZADD`), drop hits older than the window (`ZREMRANGEBYSCORE` from 0 to now − 60 s), then read the count (`ZCARD`). Precise, at the cost of memory per hit. The cheaper hybrid keeps one counter per second and sums the last 60 buckets — close enough for most products."
+          }
+        },
+        {
+          "key": "sliding-code",
+          "kind": "code",
+          "payload": {
+            "code": "$now = time();\n$key = 'rl:api:user:7';\n$w   = 60;                                            // trailing window, seconds\n\nRedis::zremrangebyscore($key, 0, $now - $w);          // drop hits older than 60 s\n$recent = Redis::zcard($key);                         // hits inside the window\n\nif ($recent >= 60) {\n    abort(429, 'Rate limit exceeded');\n}\n\nRedis::zadd($key, $now, uniqid('', true));            // record this hit (score = time)\nRedis::expire($key, $w * 2);                          // tidy the key away later",
+            "lang": "php",
+            "title": "Sliding-window log: ZADD + ZREMRANGEBYSCORE + ZCARD",
+            "caption": "Each hit costs one sorted-set entry; the three operations are not atomic by themselves — wrap them in a small Lua script when the exact count must be race-free (Laravel teams do)."
+          }
+        },
+        {
+          "key": "bucket",
+          "kind": "heading",
+          "title": "Token bucket: bursts up to a capacity"
+        },
+        {
+          "key": "bucket-text",
+          "kind": "prose",
+          "payload": {
+            "text": "A token bucket is a different contract than 'N per wall-clock minute': the bucket holds up to `capacity` tokens, refills at a steady rate, and each request spends one token. Traffic is smoothed, yet a client may burn its whole bucket in one controlled burst — the right shape for APIs whose clients legitimately spike and then go quiet. Symfony ships it as the `token_bucket` policy; Laravel teams implement it on Redis with a small Lua script (two counters: tokens and the last-refill timestamp) or a library when product requirements demand it."
+          }
+        },
+        {
+          "key": "window-table",
+          "kind": "table",
+          "payload": {
+            "title": "Fixed window vs sliding window vs token bucket",
+            "headers": [
+              "Algorithm",
+              "Contract",
+              "Boundary burst?",
+              "Redis shape",
+              "Use when"
+            ],
+            "rows": [
+              [
+                "Fixed window",
+                "N per aligned clock bucket",
+                "yes — up to 2×N across a boundary",
+                "one STRING: INCR + EXPIRE per bucket",
+                "simple, cheap; most APIs"
+              ],
+              [
+                "Sliding window (log)",
+                "N per any trailing 60 s",
+                "no",
+                "sorted set of hit timestamps: ZADD, ZREMRANGEBYSCORE, ZCARD",
+                "exact accounting; memory per hit"
+              ],
+              [
+                "Sliding window (hybrid)",
+                "≈ N over the trailing 60 s",
+                "tiny (second granularity)",
+                "60 per-second STRING counters, summed",
+                "cheaper approximation of exact"
+              ],
+              [
+                "Token bucket",
+                "capacity N, refill r per second",
+                "controlled bursts up to capacity",
+                "tokens + last-refill counters (Lua)",
+                "smooth traffic with burst headroom"
+              ]
+            ],
+            "mono": [
+              0
+            ]
+          }
+        },
+        {
+          "key": "laravel",
+          "kind": "heading",
+          "title": "Laravel's built-in limiter"
+        },
+        {
+          "key": "laravel-code",
+          "kind": "code",
+          "payload": {
+            "code": "use Illuminate\\Cache\\RateLimiting\\Limit;\nuse Illuminate\\Http\\Request;\nuse Illuminate\\Support\\Facades\\RateLimiter;\n\n// define the named limiter (typically in a service provider):\nRateLimiter::for('api', function (Request $request) {\n    return Limit::perMinute(60)->by($request->user()?->id ?: (string) $request->ip());\n});\n\n// apply it to a route group with the 'throttle:api' middleware;\n// code can inspect the same counters via RateLimiter::hit / attempt /\n// remaining / retryAfter.",
+            "lang": "php",
+            "title": "A named limiter in Laravel"
+          }
+        },
+        {
+          "key": "laravel-text",
+          "kind": "prose",
+          "payload": {
+            "text": "The counters live in the default cache store, so `CACHE_STORE=redis` is required for shared counting across instances — with the file store, each server counts its own users and the effective limit is multiplied by the number of servers. The built-in limiter is an **attempt-based decaying counter** rather than a strict sliding window: good enough for most products, and its throttle middleware answers with HTTP 429 plus a Retry-After header. When product requirements genuinely need strict semantics, Symfony's RateLimiter component provides explicit policies — `fixed_window`, `sliding_window` and `token_bucket` — with `RedisStorage` for multi-instance use."
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "callout",
+          "payload": {
+            "tone": "tip",
+            "title": "The follow-up question: where do the counters live?",
+            "text": "Answer: in the cache store — hence `CACHE_STORE=redis` on a fleet, or every instance enforces its own limit. And know which contract you actually promised: Laravel's limiter is a decaying counter, Symfony gives you the three strict policies, and an exact sliding window costs one sorted-set entry per hit."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "distributed-locks-and-durability",
+      "title": "Distributed locks on Redis — and what survives a crash",
+      "summary": "Two hard module questions share one lesson: the webhook-order lock design and the Redis persistence quiz. Learn SET NX acquisition, owner tokens, the expiry-versus-job-duration trap, RDB/AOF loss windows, and where Redlock fits.",
+      "minutes": 12,
+      "difficulty": "hard",
+      "tags": [
+        "redis",
+        "distributed-locks",
+        "concurrency",
+        "persistence",
+        "durability",
+        "lock",
+        "laravel",
+        "symfony"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "Two hard questions belong together: the module's distributed-lock scenario (two webhook instances racing to process the same order) and its persistence quiz (Redis crashes — what survives?). They share a lesson because a lock is only as good as what happens when Redis restarts or fails over, and both answers end in the same word: **idempotency**."
+          }
+        },
+        {
+          "key": "setnx",
+          "kind": "heading",
+          "title": "SET NX: the atomic acquire"
+        },
+        {
+          "key": "setnx-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`Cache::lock(name, seconds)` in Laravel is Redis `SET <key> <token> NX PX <milliseconds>` — the `NX` flag makes acquisition atomic (two instances can never both win the same key) and the expiry guarantees the lock cannot live forever if the holder dies. That expiry is also the source of the classic trap, covered below."
+          }
+        },
+        {
+          "key": "lock-basics-code",
+          "kind": "code",
+          "payload": {
+            "code": "$lock = Cache::lock('order:4711:processing', 30);\n\nif (! $lock->get()) {\n    return;                        // another instance holds the lock — abort\n}\n\ntry {\n    processOrder(4711);            // the critical section\n} finally {\n    $lock->release();              // always release, even on exceptions\n}\n\n// the acquire-run-release sugar does the same in one call:\nCache::lock('order:4711:processing', 30)->get(function () {\n    processOrder(4711);\n});",
+            "lang": "php",
+            "title": "The production shape: acquire, work, release in finally"
+          }
+        },
+        {
+          "key": "ownership",
+          "kind": "heading",
+          "title": "Ownership: never release someone else's lock"
+        },
+        {
+          "key": "ownership-text",
+          "kind": "prose",
+          "payload": {
+            "text": "`$lock->owner()` returns a unique token, and `release()` only deletes the key when the token matches — a compare-and-delete script, not a bare `DEL`. So a lock that expired and was re-acquired by someone else can never be released by the slow worker that thinks it still holds it. Pair every lock with **idempotency** — a unique constraint or a processed-marker in the database — because a lock is a liveness optimization, not a correctness guarantee."
+          }
+        },
+        {
+          "key": "ownership-watch",
+          "kind": "callout",
+          "payload": {
+            "tone": "watch",
+            "title": "Two facts interviewers probe",
+            "text": "Laravel does **not** auto-renew locks, and an expiry outlived by the job is a double-execution bug, not a theoretical one. If the critical section can legitimately outlast the TTL, size the TTL above the worst case, split the work into steps that each take their own short lock, or renew in a heartbeat loop (`refresh()` periodically). Symfony's Lock component exposes acquire / refresh / release and auto-releases on destruct."
+          }
+        },
+        {
+          "key": "expiry-trap",
+          "kind": "heading",
+          "title": "Expiry vs job duration: the central trap"
+        },
+        {
+          "key": "expiry-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "The lock expires while the job still runs",
+                "text": "The lock has a 30-second TTL but processing the order takes 45 seconds. At t=30 the key vanishes, instance B acquires it, and two workers now run the same order.",
+                "state": "TTL < critical section → double execution"
+              },
+              {
+                "title": "Size the TTL above the worst case",
+                "text": "The cheapest fix: a TTL comfortably above the worst-case critical section, with margin for GC pauses, slow queries and retries.",
+                "state": "TTL > worst case"
+              },
+              {
+                "title": "Or shrink the critical section",
+                "text": "Split the work into small steps, each under its own short lock, so a stuck step only blocks that step.",
+                "state": "small locks per step"
+              },
+              {
+                "title": "Renew in a heartbeat loop if you must",
+                "text": "Laravel will not renew for you — call `refresh()` periodically yourself. Symfony's Lock component provides `refresh()` and auto-release on destruct.",
+                "state": "explicit heartbeat"
+              },
+              {
+                "title": "Idempotency is the backstop",
+                "text": "Whatever you choose, the database must tolerate a second run: a unique constraint on the job's effect, or a processed marker checked before acting.",
+                "state": "unique effect / processed marker"
+              }
+            ],
+            "title": "Why the TTL must outlive the work",
+            "intro": "The module's scenario asks you to design this carefully. Walk the failure first:"
+          }
+        },
+        {
+          "key": "lock-figure",
+          "kind": "figure",
+          "payload": {
+            "html": "<div class=\"ld-flow\">\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-a\">A: SET NX wins<span class=\"tag\">instance A</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-c\">A processes the order<span class=\"tag\">critical section</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-b\">A: release()<span class=\"tag\">compare-and-delete</span></span>\n  </div>\n  <div class=\"ld-col\"><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-dim\">B: SET NX fails<span class=\"tag\">loser</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-dim\">B waits briefly or aborts</span>\n  </div>\n  <div class=\"ld-col\"><span class=\"ld-arrow\">&#8594;</span></div>\n  <div class=\"ld-col\">\n    <span class=\"ld-box ld-r\">A outlives the TTL<span class=\"tag\">hazard</span></span>\n    <span class=\"ld-down\">&#8595;</span>\n    <span class=\"ld-box ld-r\">B acquires while A still runs<span class=\"tag\">two workers, same order</span></span>\n  </div>\n</div>",
+            "title": "Normal timeline, then the TTL-overrun hazard",
+            "caption": "Right-hand lane: if the critical section runs longer than the lock TTL, the key expires mid-work and a second instance can acquire it — the double-execution case that idempotency must absorb."
+          }
+        },
+        {
+          "key": "crash",
+          "kind": "heading",
+          "title": "Redis restarts: persistence decides what you lose"
+        },
+        {
+          "key": "crash-text",
+          "kind": "prose",
+          "payload": {
+            "text": "With no persistence, a crash simply erases the lock — and two workers may both proceed, which is exactly why idempotency was step five. RDB snapshotting limits, but never closes, that window: an RDB file is a point-in-time binary snapshot taken on a schedule (the defaults are 900 s after at least one change, 300 s after ten, and 60 s after 10,000), so a crash loses everything written since the last snapshot — including a just-acquired lock or a counter decrement. AOF appends each write and replays it at startup, with durability set by `appendfsync`."
+          }
+        },
+        {
+          "key": "rdb-aof-table",
+          "kind": "table",
+          "payload": {
+            "title": "RDB vs AOF at a glance",
+            "headers": [
+              "",
+              "RDB (snapshot)",
+              "AOF (append-only log)"
+            ],
+            "rows": [
+              [
+                "What it stores",
+                "a point-in-time binary snapshot of the dataset",
+                "every write, appended to a log, replayed at startup"
+              ],
+              [
+                "Recovery at startup",
+                "fast — loads one snapshot",
+                "slower but more exact — replays the log"
+              ],
+              [
+                "Crash loss window",
+                "everything since the last snapshot (default schedule: 900 s / 1 change, 300 s / 10, 60 s / 10 000)",
+                "depends on appendfsync: always = smallest (fsync per command, slowest); everysec = default, about a second; no = the OS decides, larger window"
+              ],
+              [
+                "Housekeeping",
+                "the next snapshot replaces the old one",
+                "BGREWRITEAOF rewrites compact the log (Redis 7.x multi-part AOF improves rewrite robustness)"
+              ],
+              [
+                "Classic use",
+                "a pure cache that tolerates loss; plus a replica",
+                "correctness-critical state you cannot recompute"
+              ]
+            ],
+            "note": "Even appendfsync always does not cover a crash mid-command — no persistence mode makes distributed mutual exclusion crash-proof, which is why the answer always ends in application-level tolerance: idempotency keys and re-acquire loops.",
+            "em": [
+              2
+            ]
+          }
+        },
+        {
+          "key": "redlock",
+          "kind": "heading",
+          "title": "Failover and Redlock"
+        },
+        {
+          "key": "redlock-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Replication in Redis is asynchronous, so on master failover a lock written to the old master can be lost before it replicates — precisely the case Redlock targets: acquire the lock on N independent Redis masters and require a majority to proceed. Know the caveats cold: a pause or GC stop that outlasts the lock TTL, or clock jumps between nodes, can let two clients hold 'the same' lock simultaneously, and Redlock provides no fencing tokens (Martin Kleppmann's analysis; antirez's rebuttal argues a sufficiently fresh lock makes the risk negligible in practice). The pragmatic line for an interview: single Redis with owner tokens plus idempotent workers covers the vast majority of real systems, and Redlock is a discussion topic, not the default answer."
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "callout",
+          "payload": {
+            "tone": "why",
+            "title": "Answer the persistence question by data class, not by religion",
+            "text": "A pure cache tolerates loss — the application just recomputes — so RDB, or even no persistence plus a replica, is fine. Correctness-critical state — locks, rate counters, anything you cannot recompute — needs AOF with an appropriate fsync policy or, more pragmatically, application-level tolerance, because no Redis persistence mode makes mutual exclusion crash-proof."
+          }
+        }
+      ]
+    },
+    {
+      "slug": "serialization-and-when-not-to-cache",
+      "title": "Serialization traps: cached models — and when not to cache",
+      "summary": "Storing an Eloquent model in the cache works mechanically — and that is exactly why it is dangerous. Learn why a cached ORM object is a frozen snapshot, how deploys break it, and the checklist of what you should not cache at all.",
+      "minutes": 6,
+      "difficulty": "hard",
+      "tags": [
+        "caching",
+        "cache",
+        "serialization",
+        "laravel",
+        "symfony",
+        "redis",
+        "architecture"
+      ],
+      "sections": [
+        {
+          "key": "hook",
+          "kind": "prose",
+          "payload": {
+            "text": "The module's serialization question is the sneakiest in the set: `Cache::remember('report:weekly', ...)` with an Eloquent model **works** — no exception is thrown — and that is exactly why it is dangerous. This lesson explains what 'works mechanically' actually stores, and then turns the scenario task's last section into a checklist of what you should not cache at all."
+          }
+        },
+        {
+          "key": "frozen",
+          "kind": "heading",
+          "title": "A cached model is a frozen snapshot"
+        },
+        {
+          "key": "frozen-text",
+          "kind": "prose",
+          "payload": {
+            "text": "Laravel serializes cache values with PHP `serialize` (or igbinary), so an Eloquent model stores and restores without complaint. What you get back is a frozen object graph: it never learns the row changed (no hook fires on save), the eagerly loaded `lines` relation is a snapshot from serialization time, and a relation you touch after retrieval that was **not** loaded runs a fresh query on possibly outdated cached data — the classic stale-plus-N+1 combination. `hidden` and `appended` attributes, casts and dates are whatever they were when serialized."
+          }
+        },
+        {
+          "key": "frozen-code",
+          "kind": "code",
+          "payload": {
+            "code": "// mechanically fine, semantically a trap:\nCache::remember('report:weekly', 3600, fn () => Report::with('lines')->find($id));\n\n// robust: cache the FINAL representation behind a versioned key\n$payload = Report::with('lines')->find($id)->toArray();\nCache::put('report:weekly:v2:' . $id, $payload, 3600);",
+            "lang": "php",
+            "title": "Cache the representation, not the ORM object"
+          }
+        },
+        {
+          "key": "deploys",
+          "kind": "heading",
+          "title": "Deploys change the class shape"
+        },
+        {
+          "key": "shape-steps",
+          "kind": "steps",
+          "payload": {
+            "steps": [
+              {
+                "title": "What is baked into the entry",
+                "text": "Class metadata — fields, casts, hidden and appended state — is serialized with the data. A cached model is a child of the code version that wrote it.",
+                "state": "entry tied to code version"
+              },
+              {
+                "title": "A deploy that changes the shape",
+                "text": "New fields, renamed columns, removed relations or changed casts can make old entries misbehave — or fail to unserialize entirely.",
+                "state": "old entries break silently"
+              },
+              {
+                "title": "The rules that keep it safe",
+                "text": "Cache `toArray()`/`toJson()` output or a small immutable DTO; version the key when the representation's shape can change (`report:weekly:v2`); prefer computing inside the closure from fresh queries over long-lived object graphs; and if a model must be cached, add a smoke test that reads a cached entry after a shape change.",
+                "state": "arrays / DTOs + versioned keys"
+              }
+            ],
+            "title": "Why serialized objects and deploys do not mix"
+          }
+        },
+        {
+          "key": "when-not",
+          "kind": "heading",
+          "title": "When not to cache at all"
+        },
+        {
+          "key": "when-not-table",
+          "kind": "table",
+          "payload": {
+            "title": "The don't-cache checklist from the scenario task",
+            "headers": [
+              "Don't cache",
+              "Why"
+            ],
+            "rows": [
+              [
+                "per-user secrets, tokens, auth material",
+                "the cache is shared and disposable — an expiry or eviction bug becomes a security bug"
+              ],
+              [
+                "data that already lives in Redis (sessions, queues, locks)",
+                "you would create two owners for one value and two failure points"
+              ],
+              [
+                "values rewritten on nearly every request",
+                "the cache writes cost more than the reads they save"
+              ],
+              [
+                "anything where even a few seconds of staleness breaks correctness (balances, payment counters, idempotency markers)",
+                "cache-aside is stale by design between a write and its invalidation"
+              ],
+              [
+                "state you cannot rebuild from a source of truth",
+                "every cache is a disposable failure point — if the DB cannot reconstruct the value, the cache is silently becoming the system of record"
+              ]
+            ]
+          }
+        },
+        {
+          "key": "why-callout",
+          "kind": "callout",
+          "payload": {
+            "tone": "why",
+            "title": "The sentence that closes a caching design",
+            "text": "Redis is a disposable cache — the source of truth must always be rebuildable, so monitor the hit ratio and alert on drops. It applies this whole module's discipline in one line: cache what you can rebuild, invalidate what you wrote, and never let a cache become the only copy of something."
+          }
+        },
+        {
+          "key": "outro",
+          "kind": "prose",
+          "payload": {
+            "text": "When the interviewer asks 'what happens if this endpoint caches an Eloquent model?', the complete answer has four beats: it works mechanically; the graph is frozen — stale relations, lazy loads that re-query cached data, baked-in hidden/append/casts; deploys that change the class shape can break unserialization; so cache arrays, JSON or DTOs behind versioned keys. Add the don't-cache list and you have covered the whole question."
+          }
+        }
+      ]
+    }
+  ]
+}

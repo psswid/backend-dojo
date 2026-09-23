@@ -1,0 +1,321 @@
+{
+  "topic_slug": "php-plain-code",
+  "tasks": [
+    {
+      "type": "snippet",
+      "title": "str_to_hex: encode a string as its raw-byte hex",
+      "difficulty": "easy",
+      "tags": ["strings", "encoding", "hex", "bin2hex"],
+      "description": "Implement str_to_hex(string $s): string. It returns the hexadecimal representation of the raw bytes of $s — every byte as exactly two lowercase hex digits. Examples: str_to_hex('abc') returns '616263'; str_to_hex('') returns ''; str_to_hex('A1!') returns '413121'. The operation is byte-level (not character-level), so a byte whose hex is a single digit (e.g. the newline byte 0x0A) must still be padded to two digits: str_to_hex(chr(10)) returns '0a'.",
+      "starter_code": "function str_to_hex(string $s): string\n{\n    // your code here\n}",
+      "test_suite": "expect('abc', str_to_hex('abc'), '616263');\nexpect('empty', str_to_hex(''), '');\nexpect('symbols', str_to_hex('A1!'), '413121');\nexpect('zero char', str_to_hex('0'), '30');\nexpect('pads single-digit byte', str_to_hex(chr(10)), '0a');\nexpect('null byte', str_to_hex(chr(0)), '00');",
+      "solution": "function str_to_hex(string $s): string\n{\n    return bin2hex($s);\n}",
+      "rubric": null
+    },
+    {
+      "type": "snippet",
+      "title": "hex_to_str: decode hex back to a string (rejecting bad input)",
+      "difficulty": "easy",
+      "tags": ["strings", "encoding", "hex", "hex2bin", "validation"],
+      "description": "Implement hex_to_str(string $hex): ?string. It decodes a hex string back to its bytes. Rules: an empty input decodes to an empty string ''; input with an odd number of characters, or containing any character outside 0-9a-fA-F, is invalid and must return null; otherwise return the decoded string. Examples: hex_to_str('616263') returns 'abc'; hex_to_str('') returns ''; hex_to_str('414243') returns 'ABC'; hex_to_str('zz') returns null; hex_to_str('abc') returns null (odd length).",
+      "starter_code": "function hex_to_str(string $hex): ?string\n{\n    // your code here\n}",
+      "test_suite": "expect('abc', hex_to_str('616263'), 'abc');\nexpect('empty', hex_to_str(''), '');\nexpect('uppercase input', hex_to_str('414243'), 'ABC');\nexpect('single byte', hex_to_str('7a'), 'z');\nexpect('invalid chars', hex_to_str('zz'), null);\nexpect('odd length', hex_to_str('abc'), null);",
+      "solution": "function hex_to_str(string $hex): ?string\n{\n    if ($hex === '') {\n        return '';\n    }\n\n    if (strlen($hex) % 2 !== 0 || !preg_match('/^[0-9a-fA-F]*$/', $hex)) {\n        return null;\n    }\n\n    return hex2bin($hex);\n}",
+      "rubric": null
+    },
+    {
+      "type": "snippet",
+      "title": "slugify: build a URL-safe slug from a title (PL transliteration)",
+      "difficulty": "medium",
+      "tags": ["strings", "slug", "regex", "transliteration", "strtr"],
+      "description": "Implement slugify(string $title): string. It turns a human title into a URL slug. Rules: transliterate Polish letters (ą→a, ć→c, ę→e, ł→l, ń→n, ó→o, ś→s, ź→z, ż→z, and their uppercase forms); lowercase the rest; replace every run of characters that are not a-z or 0-9 with a single dash; and trim leading/trailing dashes. Examples: slugify('Witaj Świecie!') returns 'witaj-swiecie'; slugify('Zażółć gęślą jaźń') returns 'zazolc-gesla-jazn'; slugify('  Hello   World  ') returns 'hello-world'; slugify('A/B & C') returns 'a-b-c'; slugify('') returns ''.",
+      "starter_code": "function slugify(string $title): string\n{\n    // your code here\n}",
+      "test_suite": "expect('basic', slugify('Witaj Świecie!'), 'witaj-swiecie');\nexpect('polish pangram', slugify('Zażółć gęślą jaźń'), 'zazolc-gesla-jazn');\nexpect('collapse and trim', slugify('  Hello   World  '), 'hello-world');\nexpect('symbols to dashes', slugify('A/B & C'), 'a-b-c');\nexpect('empty', slugify(''), '');\nexpect('keeps digits', slugify('100% pewne'), '100-pewne');",
+      "solution": "function slugify(string $title): string\n{\n    $map = [\n        'ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n',\n        'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z',\n        'Ą' => 'a', 'Ć' => 'c', 'Ę' => 'e', 'Ł' => 'l', 'Ń' => 'n',\n        'Ó' => 'o', 'Ś' => 's', 'Ź' => 'z', 'Ż' => 'z',\n    ];\n\n    $title = strtr($title, $map);\n    $title = strtolower($title);\n    $title = preg_replace('/[^a-z0-9]+/', '-', $title);\n\n    return trim($title, '-');\n}",
+      "rubric": null
+    },
+    {
+      "type": "snippet",
+      "title": "normalize_phone: canonicalize a Polish phone number",
+      "difficulty": "medium",
+      "tags": ["strings", "phone", "normalization", "regex", "poland"],
+      "description": "Implement normalize_phone(string $phone): ?string. It normalizes a Polish phone number to the canonical form '+48 NNNNNNNNN'. Rules: strip spaces, dashes, parentheses and dots; accept a leading '+48', '0048', or a bare 9-digit number (assumed Polish), and also '48' followed by 9 digits; the result must be exactly 9 digits after the country code is removed, otherwise return null. Examples: normalize_phone('+48 601 234 567') returns '+48 601234567'; normalize_phone('0048601234567') returns '+48 601234567'; normalize_phone('601-234-567') returns '+48 601234567'; normalize_phone('48 601 234 567') returns '+48 601234567'; normalize_phone('+48 123') returns null; normalize_phone('+44 601234567') returns null.",
+      "starter_code": "function normalize_phone(string $phone): ?string\n{\n    // your code here\n}",
+      "test_suite": "expect('plus prefix', normalize_phone('+48 601 234 567'), '+48 601234567');\nexpect('0048 prefix', normalize_phone('0048601234567'), '+48 601234567');\nexpect('bare mobile', normalize_phone('601-234-567'), '+48 601234567');\nexpect('48 without plus', normalize_phone('48 601 234 567'), '+48 601234567');\nexpect('parentheses and dots', normalize_phone('(61) 855.23.45'), '+48 618552345');\nexpect('too short', normalize_phone('+48 123'), null);\nexpect('foreign prefix', normalize_phone('+44 601234567'), null);\nexpect('eight digits', normalize_phone('12345678'), null);",
+      "solution": "function normalize_phone(string $phone): ?string\n{\n    $phone = preg_replace('/[\\s\\-().]/', '', $phone);\n\n    if (str_starts_with($phone, '+48')) {\n        $phone = substr($phone, 3);\n    } elseif (str_starts_with($phone, '0048')) {\n        $phone = substr($phone, 4);\n    } elseif (strlen($phone) === 11 && str_starts_with($phone, '48')) {\n        $phone = substr($phone, 2);\n    }\n\n    if (!preg_match('/^[0-9]{9}$/', $phone)) {\n        return null;\n    }\n\n    return '+48 ' . $phone;\n}",
+      "rubric": null
+    },
+    {
+      "type": "snippet",
+      "title": "is_valid_isbn10: validate ISBN-10 with checksum",
+      "difficulty": "medium",
+      "tags": ["validation", "isbn", "checksum", "strings"],
+      "description": "Implement is_valid_isbn10(string $isbn): bool. It validates an ISBN-10. Rules: strip spaces and dashes; the result must be exactly 10 characters — 9 digits followed by a digit or the uppercase letter 'X'; compute the check: sum over positions i=0..8 of (10 - i) * digit, then add 10 if the last character is 'X' or its digit value otherwise; the ISBN is valid when this total is divisible by 11. Examples: is_valid_isbn10('0-306-40615-2') returns true; is_valid_isbn10('0306406152') returns true; is_valid_isbn10('0306406153') returns false; is_valid_isbn10('123456789X') returns true; is_valid_isbn10('123456789') returns false.",
+      "starter_code": "function is_valid_isbn10(string $isbn): bool\n{\n    // your code here\n}",
+      "test_suite": "expect('classic valid with dashes', is_valid_isbn10('0-306-40615-2'), true);\nexpect('classic valid bare', is_valid_isbn10('0306406152'), true);\nexpect('wrong check digit', is_valid_isbn10('0306406153'), false);\nexpect('X checksum valid', is_valid_isbn10('123456789X'), true);\nexpect('X checksum invalid', is_valid_isbn10('1234567890'), false);\nexpect('too short', is_valid_isbn10('123456789'), false);\nexpect('lowercase x rejected', is_valid_isbn10('0-306-40615-x'), false);",
+      "solution": "function is_valid_isbn10(string $isbn): bool\n{\n    $isbn = preg_replace('/[\\s-]/', '', $isbn);\n\n    if (!preg_match('/^[0-9]{9}[0-9X]$/', $isbn)) {\n        return false;\n    }\n\n    $sum = 0;\n    for ($i = 0; $i < 9; $i++) {\n        $sum += (10 - $i) * (int) $isbn[$i];\n    }\n\n    $sum += $isbn[9] === 'X' ? 10 : (int) $isbn[9];\n\n    return $sum % 11 === 0;\n}",
+      "rubric": null
+    },
+    {
+      "type": "snippet",
+      "title": "is_valid_isbn13: validate ISBN-13 with alternating weights",
+      "difficulty": "medium",
+      "tags": ["validation", "isbn", "checksum", "strings"],
+      "description": "Implement is_valid_isbn13(string $isbn): bool. It validates an ISBN-13. Rules: strip spaces and dashes; the result must be exactly 13 digits; compute the check as the alternating weighted sum — position 0 uses weight 1, position 1 uses weight 3, and so on (1,3,1,3...); the ISBN is valid when the sum is divisible by 10. Examples: is_valid_isbn13('9780306406157') returns true; is_valid_isbn13('978-0-306-40615-7') returns true; is_valid_isbn13('9780306406158') returns false; is_valid_isbn13('978030640615') returns false.",
+      "starter_code": "function is_valid_isbn13(string $isbn): bool\n{\n    // your code here\n}",
+      "test_suite": "expect('classic valid bare', is_valid_isbn13('9780306406157'), true);\nexpect('classic valid with dashes', is_valid_isbn13('978-0-306-40615-7'), true);\nexpect('another valid', is_valid_isbn13('9791234567896'), true);\nexpect('wrong check digit', is_valid_isbn13('9780306406158'), false);\nexpect('too short', is_valid_isbn13('978030640615'), false);",
+      "solution": "function is_valid_isbn13(string $isbn): bool\n{\n    $isbn = preg_replace('/[\\s-]/', '', $isbn);\n\n    if (!preg_match('/^[0-9]{13}$/', $isbn)) {\n        return false;\n    }\n\n    $sum = 0;\n    for ($i = 0; $i < 13; $i++) {\n        $sum += (int) $isbn[$i] * ($i % 2 === 0 ? 1 : 3);\n    }\n\n    return $sum % 10 === 0;\n}",
+      "rubric": null
+    },
+    {
+      "type": "snippet",
+      "title": "is_valid_isbn: dispatch to ISBN-10 or ISBN-13 by length",
+      "difficulty": "easy",
+      "tags": ["validation", "isbn", "checksum", "strings"],
+      "description": "Implement is_valid_isbn(string $isbn): bool. It validates either ISBN format. Rules: strip spaces and dashes; if the result has 10 characters apply the ISBN-10 check (9 digits then a digit or 'X', weighted sum divisible by 11); if it has 13 characters apply the ISBN-13 check (13 digits, alternating 1/3 weights, sum divisible by 10); any other length returns false. The function must be self-contained (no external helpers). Examples: is_valid_isbn('0-306-40615-2') returns true; is_valid_isbn('9780306406157') returns true; is_valid_isbn('0306406153') returns false; is_valid_isbn('12345') returns false.",
+      "starter_code": "function is_valid_isbn(string $isbn): bool\n{\n    // your code here\n}",
+      "test_suite": "expect('isbn10 valid', is_valid_isbn('0-306-40615-2'), true);\nexpect('isbn13 valid', is_valid_isbn('9780306406157'), true);\nexpect('isbn10 invalid', is_valid_isbn('0306406153'), false);\nexpect('bad length', is_valid_isbn('12345'), false);\nexpect('isbn13 with dashes', is_valid_isbn('978-0-306-40615-7'), true);",
+      "solution": "function is_valid_isbn(string $isbn): bool\n{\n    $isbn = preg_replace('/[\\s-]/', '', $isbn);\n    $len = strlen($isbn);\n\n    if ($len === 10) {\n        if (!preg_match('/^[0-9]{9}[0-9X]$/', $isbn)) {\n            return false;\n        }\n        $sum = 0;\n        for ($i = 0; $i < 9; $i++) {\n            $sum += (10 - $i) * (int) $isbn[$i];\n        }\n        $sum += $isbn[9] === 'X' ? 10 : (int) $isbn[9];\n        return $sum % 11 === 0;\n    }\n\n    if ($len === 13) {\n        if (!preg_match('/^[0-9]{13}$/', $isbn)) {\n            return false;\n        }\n        $sum = 0;\n        for ($i = 0; $i < 13; $i++) {\n            $sum += (int) $isbn[$i] * ($i % 2 === 0 ? 1 : 3);\n        }\n        return $sum % 10 === 0;\n    }\n\n    return false;\n}",
+      "rubric": null
+    },
+    {
+      "type": "snippet",
+      "title": "is_valid_pesel: validate a Polish PESEL checksum",
+      "difficulty": "medium",
+      "tags": ["validation", "pesel", "checksum", "poland"],
+      "description": "Implement is_valid_pesel(string $pesel): bool. It validates the PESEL control digit (length + checksum only, not the embedded birth date). Rules: the input must be exactly 11 digits; the first 10 digits are weighted by [1,3,7,9,1,3,7,9,1,3]; the control digit (11th) must equal (10 - (sum % 10)) % 10. Examples: is_valid_pesel('44051401359') returns true; is_valid_pesel('44051401358') returns false; is_valid_pesel('4405140135') returns false; is_valid_pesel('4405140135a') returns false.",
+      "starter_code": "function is_valid_pesel(string $pesel): bool\n{\n    // your code here\n}",
+      "test_suite": "expect('valid pesel', is_valid_pesel('44051401359'), true);\nexpect('wrong control digit', is_valid_pesel('44051401358'), false);\nexpect('too short', is_valid_pesel('4405140135'), false);\nexpect('non-digit', is_valid_pesel('4405140135a'), false);",
+      "solution": "function is_valid_pesel(string $pesel): bool\n{\n    if (!preg_match('/^[0-9]{11}$/', $pesel)) {\n        return false;\n    }\n\n    $weights = [1, 3, 7, 9, 1, 3, 7, 9, 1, 3];\n    $sum = 0;\n    for ($i = 0; $i < 10; $i++) {\n        $sum += (int) $pesel[$i] * $weights[$i];\n    }\n\n    $check = (10 - ($sum % 10)) % 10;\n\n    return $check === (int) $pesel[10];\n}",
+      "rubric": null
+    },
+    {
+      "type": "snippet",
+      "title": "is_valid_nip: validate a Polish NIP checksum",
+      "difficulty": "medium",
+      "tags": ["validation", "nip", "checksum", "poland"],
+      "description": "Implement is_valid_nip(string $nip): bool. It validates a Polish tax ID (NIP). Rules: strip spaces and dashes; the result must be exactly 10 digits; the first 9 digits are weighted by [6,5,7,2,3,4,5,6,7]; the control digit equals (weighted sum) % 11, and a checksum of 10 makes the NIP invalid. Examples: is_valid_nip('7777777777') returns true; is_valid_nip('777-777-77-77') returns true; is_valid_nip('7777777778') returns false; is_valid_nip('777777777') returns false.",
+      "starter_code": "function is_valid_nip(string $nip): bool\n{\n    // your code here\n}",
+      "test_suite": "expect('valid nip', is_valid_nip('7777777777'), true);\nexpect('valid with dashes', is_valid_nip('777-777-77-77'), true);\nexpect('wrong control digit', is_valid_nip('7777777778'), false);\nexpect('too short', is_valid_nip('777777777'), false);\nexpect('non-digit', is_valid_nip('777777777a'), false);",
+      "solution": "function is_valid_nip(string $nip): bool\n{\n    $nip = preg_replace('/[\\s-]/', '', $nip);\n\n    if (!preg_match('/^[0-9]{10}$/', $nip)) {\n        return false;\n    }\n\n    $weights = [6, 5, 7, 2, 3, 4, 5, 6, 7];\n    $sum = 0;\n    for ($i = 0; $i < 9; $i++) {\n        $sum += (int) $nip[$i] * $weights[$i];\n    }\n\n    $check = $sum % 11;\n    if ($check === 10) {\n        return false;\n    }\n\n    return $check === (int) $nip[9];\n}",
+      "rubric": null
+    },
+    {
+      "type": "snippet",
+      "title": "luhn_check: validate a card number with the Luhn algorithm",
+      "difficulty": "medium",
+      "tags": ["validation", "luhn", "checksum", "strings"],
+      "description": "Implement luhn_check(string $number): bool. It validates a card/account number with the Luhn algorithm. Rules: strip spaces and dashes; the input must be at least 2 digits; from the rightmost digit (the check digit, not doubled) moving left, double every second digit — if doubling yields a value over 9, subtract 9; sum all digits; the number is valid when the sum is divisible by 10. Examples: luhn_check('79927398713') returns true; luhn_check('4242424242424242') returns true; luhn_check('4242424242424243') returns false; luhn_check('4') returns false.",
+      "starter_code": "function luhn_check(string $number): bool\n{\n    // your code here\n}",
+      "test_suite": "expect('classic odd-length valid', luhn_check('79927398713'), true);\nexpect('even-length valid', luhn_check('4242424242424242'), true);\nexpect('with spaces valid', luhn_check('4242 4242 4242 4242'), true);\nexpect('wrong check digit', luhn_check('4242424242424243'), false);\nexpect('too short', luhn_check('4'), false);",
+      "solution": "function luhn_check(string $number): bool\n{\n    $number = preg_replace('/[\\s-]/', '', $number);\n\n    if (!preg_match('/^[0-9]{2,}$/', $number)) {\n        return false;\n    }\n\n    $sum = 0;\n    $len = strlen($number);\n    for ($i = 0; $i < $len; $i++) {\n        $d = (int) $number[$i];\n        if (($len - $i) % 2 === 0) {\n            $d *= 2;\n            if ($d > 9) {\n                $d -= 9;\n            }\n        }\n        $sum += $d;\n    }\n\n    return $sum % 10 === 0;\n}",
+      "rubric": null
+    },
+    {
+      "type": "snippet",
+      "title": "extract_emails: find unique email addresses in text",
+      "difficulty": "medium",
+      "tags": ["regex", "strings", "dedup", "preg_match_all"],
+      "description": "Implement extract_emails(string $text): array. It returns a list of every unique email address found in $text, in order of first appearance. Use a simple address pattern: local part of letters/digits and ._%+-, then '@', then a domain of letters/digits and dots/hyphens, then a dot and a TLD of at least two letters. Examples: extract_emails('Contact jan@example.com or ANNA.KELLER@foo.pl today') returns ['jan@example.com', 'ANNA.KELLER@foo.pl']; extract_emails('No emails here') returns []; extract_emails('dup: a@b.co and a@b.co again') returns ['a@b.co'].",
+      "starter_code": "function extract_emails(string $text): array\n{\n    // your code here\n}",
+      "test_suite": "expect('two emails', extract_emails('Contact jan@example.com or ANNA.KELLER@foo.pl today'), ['jan@example.com', 'ANNA.KELLER@foo.pl']);\nexpect('none', extract_emails('No emails here'), []);\nexpect('dedup', extract_emails('dup: a@b.co and a@b.co again'), ['a@b.co']);\nexpect('symbols in local part', extract_emails('write to john.doe+tag@sub.domain.org'), ['john.doe+tag@sub.domain.org']);",
+      "solution": "function extract_emails(string $text): array\n{\n    preg_match_all('/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/', $text, $matches);\n\n    $result = [];\n    foreach ($matches[0] as $email) {\n        if (!in_array($email, $result, true)) {\n            $result[] = $email;\n        }\n    }\n\n    return $result;\n}",
+      "rubric": null
+    },
+    {
+      "type": "snippet",
+      "title": "group_by: group associative rows by a key",
+      "difficulty": "easy",
+      "tags": ["arrays", "grouping", "associative"],
+      "description": "Implement group_by(array $rows, string $key): array. It groups a list of associative arrays by the value of $key, returning an array whose keys are the distinct values of $key (in order of first appearance) and whose values are lists of the rows having that value, in their original relative order. Rows that do not contain $key are skipped. Example: group_by([['g' => 'a', 'v' => 1], ['g' => 'b', 'v' => 2], ['g' => 'a', 'v' => 3]], 'g') returns ['a' => [['g' => 'a', 'v' => 1], ['g' => 'a', 'v' => 3]], 'b' => [['g' => 'b', 'v' => 2]]].",
+      "starter_code": "function group_by(array $rows, string $key): array\n{\n    // your code here\n}",
+      "test_suite": "expect('groups in order', group_by([['g' => 'a', 'v' => 1], ['g' => 'b', 'v' => 2], ['g' => 'a', 'v' => 3]], 'g'), ['a' => [['g' => 'a', 'v' => 1], ['g' => 'a', 'v' => 3]], 'b' => [['g' => 'b', 'v' => 2]]]);\nexpect('empty', group_by([], 'g'), []);\nexpect('skips missing key', group_by([['g' => 'a'], ['x' => 1]], 'g'), ['a' => [['g' => 'a']]]);",
+      "solution": "function group_by(array $rows, string $key): array\n{\n    $groups = [];\n\n    foreach ($rows as $row) {\n        if (!array_key_exists($key, $row)) {\n            continue;\n        }\n        $groups[$row[$key]][] = $row;\n    }\n\n    return $groups;\n}",
+      "rubric": null
+    },
+    {
+      "type": "snippet",
+      "title": "sort_by_key: stable sort of rows by a key",
+      "difficulty": "medium",
+      "tags": ["arrays", "sorting", "usort", "spaceship"],
+      "description": "Implement sort_by_key(array $rows, string $key, string $order = 'asc'): array. It returns a new list sorted by the value of $key, ascending ('asc') or descending ('desc'). Rows missing $key sort as null (first in ascending, last in descending). The sort must be stable: rows with equal keys keep their original relative order. Use usort with the spaceship operator plus an index tiebreaker. Examples: sort_by_key([['n' => 'b'], ['n' => 'a'], ['n' => 'c']], 'n') returns [['n' => 'a'], ['n' => 'b'], ['n' => 'c']]; sort_by_key([['n' => 2], ['n' => 1], ['n' => 3]], 'n', 'desc') returns [['n' => 3], ['n' => 2], ['n' => 1]].",
+      "starter_code": "function sort_by_key(array $rows, string $key, string $order = 'asc'): array\n{\n    // your code here\n}",
+      "test_suite": "expect('asc strings', sort_by_key([['n' => 'b'], ['n' => 'a'], ['n' => 'c']], 'n'), [['n' => 'a'], ['n' => 'b'], ['n' => 'c']]);\nexpect('desc ints', sort_by_key([['n' => 2], ['n' => 1], ['n' => 3]], 'n', 'desc'), [['n' => 3], ['n' => 2], ['n' => 1]]);\nexpect('missing key first asc', sort_by_key([['n' => 'b'], ['x' => 1], ['n' => 'a']], 'n'), [['x' => 1], ['n' => 'a'], ['n' => 'b']]);",
+      "solution": "function sort_by_key(array $rows, string $key, string $order = 'asc'): array\n{\n    $indexed = [];\n    $i = 0;\n    foreach ($rows as $row) {\n        $indexed[] = ['v' => $row[$key] ?? null, 'i' => $i, 'row' => $row];\n        $i++;\n    }\n\n    usort($indexed, function ($a, $b) use ($order) {\n        $cmp = $a['v'] <=> $b['v'];\n        if ($order === 'desc') {\n            $cmp = -$cmp;\n        }\n        if ($cmp !== 0) {\n            return $cmp;\n        }\n        return $a['i'] <=> $b['i'];\n    });\n\n    $result = [];\n    foreach ($indexed as $item) {\n        $result[] = $item['row'];\n    }\n\n    return $result;\n}",
+      "rubric": null
+    },
+    {
+      "type": "snippet",
+      "title": "dedup_by_key: keep first row per key value (strict)",
+      "difficulty": "easy",
+      "tags": ["arrays", "dedup", "strict-comparison"],
+      "description": "Implement dedup_by_key(array $rows, string $key): array. It returns the rows with duplicates on $key removed, keeping the FIRST occurrence and preserving original order. Comparison must be strict, so the integer 1 and the string '1' are different keys. Examples: dedup_by_key([['id' => 1], ['id' => 2], ['id' => 1], ['id' => 3]], 'id') returns [['id' => 1], ['id' => 2], ['id' => 3]]; dedup_by_key([['id' => 1], ['id' => '1'], ['id' => 1]], 'id') returns [['id' => 1], ['id' => '1']].",
+      "starter_code": "function dedup_by_key(array $rows, string $key): array\n{\n    // your code here\n}",
+      "test_suite": "expect('keeps first', dedup_by_key([['id' => 1], ['id' => 2], ['id' => 1], ['id' => 3]], 'id'), [['id' => 1], ['id' => 2], ['id' => 3]]);\nexpect('empty', dedup_by_key([], 'id'), []);\nexpect('strict int vs string', dedup_by_key([['id' => 1], ['id' => '1'], ['id' => 1]], 'id'), [['id' => 1], ['id' => '1']]);",
+      "solution": "function dedup_by_key(array $rows, string $key): array\n{\n    $result = [];\n    $seen = [];\n\n    foreach ($rows as $row) {\n        $v = $row[$key];\n        if (in_array($v, $seen, true)) {\n            continue;\n        }\n        $seen[] = $v;\n        $result[] = $row;\n    }\n\n    return $result;\n}",
+      "rubric": null
+    },
+    {
+      "type": "snippet",
+      "title": "flatten: recursively flatten nested arrays",
+      "difficulty": "easy",
+      "tags": ["arrays", "recursion", "flatten"],
+      "description": "Implement flatten(array $nested): array. It recursively flattens arbitrarily nested arrays of scalars into a single flat list, preserving depth-first order. Examples: flatten([1, [2, [3, 4]], 5]) returns [1, 2, 3, 4, 5]; flatten([]) returns []; flatten([[],[1],[[2]]]) returns [1, 2].",
+      "starter_code": "function flatten(array $nested): array\n{\n    // your code here\n}",
+      "test_suite": "expect('nested', flatten([1, [2, [3, 4]], 5]), [1, 2, 3, 4, 5]);\nexpect('empty', flatten([]), []);\nexpect('empty subarrays', flatten([[],[1],[[2]]]), [1, 2]);\nexpect('strings', flatten(['a', ['b', 'c']]), ['a', 'b', 'c']);",
+      "solution": "function flatten(array $nested): array\n{\n    $result = [];\n\n    foreach ($nested as $item) {\n        if (is_array($item)) {\n            foreach (flatten($item) as $v) {\n                $result[] = $v;\n            }\n        } else {\n            $result[] = $item;\n        }\n    }\n\n    return $result;\n}",
+      "rubric": null
+    },
+    {
+      "type": "snippet",
+      "title": "paginate_array: slice an array for a 1-based page",
+      "difficulty": "easy",
+      "tags": ["arrays", "pagination", "slice"],
+      "description": "Implement paginate_array(array $items, int $page, int $perPage): array. It returns the slice of $items for a 1-based page number. Rules: if $page is less than 1 or $perPage is less than or equal to 0, return []; if the offset is past the end, return []; otherwise return up to $perPage items starting at offset (page - 1) * perPage. Examples: paginate_array([1,2,3,4,5], 1, 2) returns [1,2]; paginate_array([1,2,3,4,5], 3, 2) returns [5]; paginate_array([1,2,3], 5, 2) returns []; paginate_array([1,2,3], 1, 0) returns [].",
+      "starter_code": "function paginate_array(array $items, int $page, int $perPage): array\n{\n    // your code here\n}",
+      "test_suite": "expect('first page', paginate_array([1,2,3,4,5], 1, 2), [1,2]);\nexpect('second page', paginate_array([1,2,3,4,5], 2, 2), [3,4]);\nexpect('last partial page', paginate_array([1,2,3,4,5], 3, 2), [5]);\nexpect('out of range', paginate_array([1,2,3], 5, 2), []);\nexpect('zero per page', paginate_array([1,2,3], 1, 0), []);\nexpect('negative page', paginate_array([1,2,3], 0, 2), []);",
+      "solution": "function paginate_array(array $items, int $page, int $perPage): array\n{\n    if ($page < 1 || $perPage <= 0) {\n        return [];\n    }\n\n    $offset = ($page - 1) * $perPage;\n    if ($offset >= count($items)) {\n        return [];\n    }\n\n    return array_slice($items, $offset, $perPage);\n}",
+      "rubric": null
+    },
+    {
+      "type": "snippet",
+      "title": "safe_int: coerce a value to int or reject it",
+      "difficulty": "medium",
+      "tags": ["type-juggling", "validation", "null", "edge-cases"],
+      "description": "Implement safe_int(mixed $value): ?int. It returns an integer for 'clean' integer-like input and null otherwise. Rules: an int is returned as-is; a float is returned as int only if it has no fractional part (3.0 -> 3, 3.5 -> null); a string is trimmed and must match an optional sign followed by digits only ('42' -> 42, '-7' -> -7, '0' -> 0, but '3.5', '42a', '' and whitespace-only -> null); null, bool, arrays and objects always return null. Examples: safe_int(42) returns 42; safe_int('42') returns 42; safe_int(3.0) returns 3; safe_int(3.5) returns null; safe_int('') returns null; safe_int(null) returns null; safe_int(false) returns null.",
+      "starter_code": "function safe_int(mixed $value): ?int\n{\n    // your code here\n}",
+      "test_suite": "expect('int passthrough', safe_int(42), 42);\nexpect('numeric string', safe_int('42'), 42);\nexpect('negative string', safe_int('-7'), -7);\nexpect('integral float', safe_int(3.0), 3);\nexpect('fractional float', safe_int(3.5), null);\nexpect('fractional string', safe_int('3.5'), null);\nexpect('empty string', safe_int(''), null);\nexpect('trimmed', safe_int('  42  '), 42);\nexpect('null', safe_int(null), null);\nexpect('false', safe_int(false), null);\nexpect('zero string', safe_int('0'), 0);\nexpect('trailing junk', safe_int('42a'), null);",
+      "solution": "function safe_int(mixed $value): ?int\n{\n    if (is_int($value)) {\n        return $value;\n    }\n\n    if (is_float($value)) {\n        return ($value == (int) $value) ? (int) $value : null;\n    }\n\n    if (is_string($value)) {\n        $value = trim($value);\n        if ($value === '') {\n            return null;\n        }\n        if (preg_match('/^-?\\d+$/', $value)) {\n            return (int) $value;\n        }\n        return null;\n    }\n\n    return null;\n}",
+      "rubric": null
+    },
+    {
+      "type": "snippet",
+      "title": "mask_email: mask the middle of the local part",
+      "difficulty": "easy",
+      "tags": ["strings", "masking", "substr", "str_repeat"],
+      "description": "Implement mask_email(string $email): string. It masks the local part (before '@') of an email address: keep the first and last character, and replace every character between them with '*'. A local part of length 1 or 2 is left unchanged, as is any input without an '@'. Examples: mask_email('jan.kowalski@example.com') returns 'j**********i@example.com'; mask_email('ab@x.com') returns 'ab@x.com'; mask_email('a@x.com') returns 'a@x.com'; mask_email('no-at-sign') returns 'no-at-sign'.",
+      "starter_code": "function mask_email(string $email): string\n{\n    // your code here\n}",
+      "test_suite": "expect('long local part', mask_email('jan.kowalski@example.com'), 'j**********i@example.com');\nexpect('two-char local', mask_email('ab@x.com'), 'ab@x.com');\nexpect('one-char local', mask_email('a@x.com'), 'a@x.com');\nexpect('no at sign', mask_email('no-at-sign'), 'no-at-sign');",
+      "solution": "function mask_email(string $email): string\n{\n    $at = strpos($email, '@');\n    if ($at === false) {\n        return $email;\n    }\n\n    $local = substr($email, 0, $at);\n    $domain = substr($email, $at);\n    $len = strlen($local);\n\n    if ($len <= 2) {\n        return $email;\n    }\n\n    return $local[0] . str_repeat('*', $len - 2) . $local[$len - 1] . $domain;\n}",
+      "rubric": null
+    },
+    {
+      "type": "debug",
+      "title": "str_to_hex loses the leading zero of single-digit bytes",
+      "difficulty": "easy",
+      "tags": ["strings", "hex", "debugging", "padding"],
+      "description": "str_to_hex(string $s): string must return each byte as exactly two lowercase hex digits. The broken version loops over bytes and concatenates dechex(ord(...)) without padding, so a byte whose hex is a single digit (like the newline byte 0x0A) produces 'a' instead of '0a'. Fix it so every byte is two digits. Hint: either pad each byte with str_pad(..., 2, '0', STR_PAD_LEFT) or replace the whole loop with the built-in bin2hex().",
+      "starter_code": "function str_to_hex(string $s): string\n{\n    $out = '';\n    for ($i = 0; $i < strlen($s); $i++) {\n        $out .= dechex(ord($s[$i]));\n    }\n    return $out;\n}",
+      "test_suite": "expect('abc', str_to_hex('abc'), '616263');\nexpect('empty', str_to_hex(''), '');\nexpect('pads single-digit byte', str_to_hex(chr(10)), '0a');\nexpect('null byte', str_to_hex(chr(0)), '00');",
+      "solution": "function str_to_hex(string $s): string\n{\n    return bin2hex($s);\n}",
+      "rubric": null
+    },
+    {
+      "type": "debug",
+      "title": "hex_to_str returns null for the empty string",
+      "difficulty": "easy",
+      "tags": ["strings", "hex", "null-handling", "debugging"],
+      "description": "hex_to_str(string $hex): ?string must decode an empty input to an empty string '' and an invalid input to null. The broken version returns null for the empty string, so callers cannot distinguish 'empty input' from 'malformed input'. Fix only the empty-string branch. Hint: the empty string is valid and must decode to ''.",
+      "starter_code": "function hex_to_str(string $hex): ?string\n{\n    if ($hex === '') {\n        return null;\n    }\n\n    if (strlen($hex) % 2 !== 0 || !preg_match('/^[0-9a-fA-F]*$/', $hex)) {\n        return null;\n    }\n\n    return hex2bin($hex);\n}",
+      "test_suite": "expect('empty decodes to empty', hex_to_str(''), '');\nexpect('abc', hex_to_str('616263'), 'abc');\nexpect('invalid chars', hex_to_str('zz'), null);\nexpect('odd length', hex_to_str('abc'), null);",
+      "solution": "function hex_to_str(string $hex): ?string\n{\n    if ($hex === '') {\n        return '';\n    }\n\n    if (strlen($hex) % 2 !== 0 || !preg_match('/^[0-9a-fA-F]*$/', $hex)) {\n        return null;\n    }\n\n    return hex2bin($hex);\n}",
+      "rubric": null
+    },
+    {
+      "type": "debug",
+      "title": "slugify leaves leading/trailing dashes on padded input",
+      "difficulty": "medium",
+      "tags": ["strings", "slug", "regex", "trim", "debugging"],
+      "description": "slugify(string $title): string must transliterate, lowercase, collapse non-alphanumeric runs into a single dash, AND trim leading/trailing dashes. The broken version does everything except the final trim, so padded input like '  Hello   World  ' yields '-hello-world-' instead of 'hello-world'. Add the missing trim. Hint: trim($title, '-').",
+      "starter_code": "function slugify(string $title): string\n{\n    $map = ['ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n', 'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z', 'Ą' => 'a', 'Ć' => 'c', 'Ę' => 'e', 'Ł' => 'l', 'Ń' => 'n', 'Ó' => 'o', 'Ś' => 's', 'Ź' => 'z', 'Ż' => 'z'];\n    $title = strtr($title, $map);\n    $title = strtolower($title);\n    return preg_replace('/[^a-z0-9]+/', '-', $title);\n}",
+      "test_suite": "expect('collapse and trim', slugify('  Hello   World  '), 'hello-world');\nexpect('basic', slugify('Witaj Świecie!'), 'witaj-swiecie');\nexpect('symbols', slugify('A/B & C'), 'a-b-c');",
+      "solution": "function slugify(string $title): string\n{\n    $map = ['ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n', 'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z', 'Ą' => 'a', 'Ć' => 'c', 'Ę' => 'e', 'Ł' => 'l', 'Ń' => 'n', 'Ó' => 'o', 'Ś' => 's', 'Ź' => 'z', 'Ż' => 'z'];\n    $title = strtr($title, $map);\n    $title = strtolower($title);\n    $title = preg_replace('/[^a-z0-9]+/', '-', $title);\n    return trim($title, '-');\n}",
+      "rubric": null
+    },
+    {
+      "type": "debug",
+      "title": "normalize_phone only strips spaces, not dashes/parens",
+      "difficulty": "medium",
+      "tags": ["strings", "phone", "regex", "debugging"],
+      "description": "normalize_phone(string $phone): ?string must strip spaces, dashes, parentheses and dots before normalizing. The broken version removes only spaces, so a bare mobile number written with dashes ('601-234-567') fails validation and returns null instead of '+48 601234567'. Fix the separator-stripping step to cover all of: whitespace, dashes, parentheses and dots.",
+      "starter_code": "function normalize_phone(string $phone): ?string\n{\n    $phone = str_replace(' ', '', $phone);\n\n    if (str_starts_with($phone, '+48')) {\n        $phone = substr($phone, 3);\n    } elseif (str_starts_with($phone, '0048')) {\n        $phone = substr($phone, 4);\n    }\n\n    if (!preg_match('/^[0-9]{9}$/', $phone)) {\n        return null;\n    }\n\n    return '+48 ' . $phone;\n}",
+      "test_suite": "expect('bare mobile with dashes', normalize_phone('601-234-567'), '+48 601234567');\nexpect('plus prefix', normalize_phone('+48 601 234 567'), '+48 601234567');\nexpect('parentheses and dots', normalize_phone('(61) 855.23.45'), '+48 618552345');\nexpect('too short', normalize_phone('+48 123'), null);",
+      "solution": "function normalize_phone(string $phone): ?string\n{\n    $phone = preg_replace('/[\\s\\-().]/', '', $phone);\n\n    if (str_starts_with($phone, '+48')) {\n        $phone = substr($phone, 3);\n    } elseif (str_starts_with($phone, '0048')) {\n        $phone = substr($phone, 4);\n    } elseif (strlen($phone) === 11 && str_starts_with($phone, '48')) {\n        $phone = substr($phone, 2);\n    }\n\n    if (!preg_match('/^[0-9]{9}$/', $phone)) {\n        return null;\n    }\n\n    return '+48 ' . $phone;\n}",
+      "rubric": null
+    },
+    {
+      "type": "debug",
+      "title": "is_valid_pesel uses a wrong checksum weight",
+      "difficulty": "medium",
+      "tags": ["validation", "pesel", "checksum", "debugging"],
+      "description": "is_valid_pesel(string $pesel): bool must validate the PESEL control digit using weights [1,3,7,9,1,3,7,9,1,3]. The broken version has a typo in the weights array, so a valid PESEL is rejected. Find and fix the incorrect weight. Hint: the control digit is (10 - (sum % 10)) % 10 over the first 10 digits.",
+      "starter_code": "function is_valid_pesel(string $pesel): bool\n{\n    if (!preg_match('/^[0-9]{11}$/', $pesel)) {\n        return false;\n    }\n\n    $weights = [2, 3, 7, 9, 1, 3, 7, 9, 1, 3];\n    $sum = 0;\n    for ($i = 0; $i < 10; $i++) {\n        $sum += (int) $pesel[$i] * $weights[$i];\n    }\n\n    $check = (10 - ($sum % 10)) % 10;\n\n    return $check === (int) $pesel[10];\n}",
+      "test_suite": "expect('valid pesel', is_valid_pesel('44051401359'), true);\nexpect('wrong control digit', is_valid_pesel('44051401358'), false);\nexpect('too short', is_valid_pesel('4405140135'), false);",
+      "solution": "function is_valid_pesel(string $pesel): bool\n{\n    if (!preg_match('/^[0-9]{11}$/', $pesel)) {\n        return false;\n    }\n\n    $weights = [1, 3, 7, 9, 1, 3, 7, 9, 1, 3];\n    $sum = 0;\n    for ($i = 0; $i < 10; $i++) {\n        $sum += (int) $pesel[$i] * $weights[$i];\n    }\n\n    $check = (10 - ($sum % 10)) % 10;\n\n    return $check === (int) $pesel[10];\n}",
+      "rubric": null
+    },
+    {
+      "type": "debug",
+      "title": "luhn_check doubles the wrong digits for even-length numbers",
+      "difficulty": "hard",
+      "tags": ["validation", "luhn", "checksum", "debugging"],
+      "description": "luhn_check(string $number): bool must double every second digit counting from the right (the check digit, rightmost, is not doubled). The broken version doubles every second digit counting from the LEFT, which happens to be correct for odd-length numbers but wrong for even-length numbers — so an even-length card like '4242424242424242' is wrongly rejected. Fix the doubling condition. Hint: double a digit when (length - index) is even.",
+      "starter_code": "function luhn_check(string $number): bool\n{\n    $number = preg_replace('/[\\s-]/', '', $number);\n    if (!preg_match('/^[0-9]{2,}$/', $number)) {\n        return false;\n    }\n\n    $sum = 0;\n    for ($i = 0; $i < strlen($number); $i++) {\n        $d = (int) $number[$i];\n        if ($i % 2 === 1) {\n            $d *= 2;\n            if ($d > 9) {\n                $d -= 9;\n            }\n        }\n        $sum += $d;\n    }\n\n    return $sum % 10 === 0;\n}",
+      "test_suite": "expect('odd-length valid', luhn_check('79927398713'), true);\nexpect('even-length valid', luhn_check('4242424242424242'), true);\nexpect('even-length invalid', luhn_check('4242424242424243'), false);\nexpect('too short', luhn_check('4'), false);",
+      "solution": "function luhn_check(string $number): bool\n{\n    $number = preg_replace('/[\\s-]/', '', $number);\n    if (!preg_match('/^[0-9]{2,}$/', $number)) {\n        return false;\n    }\n\n    $sum = 0;\n    $len = strlen($number);\n    for ($i = 0; $i < $len; $i++) {\n        $d = (int) $number[$i];\n        if (($len - $i) % 2 === 0) {\n            $d *= 2;\n            if ($d > 9) {\n                $d -= 9;\n            }\n        }\n        $sum += $d;\n    }\n\n    return $sum % 10 === 0;\n}",
+      "rubric": null
+    },
+    {
+      "type": "scenario",
+      "title": "Design a normalization + validation pipeline for Polish contact data",
+      "difficulty": "hard",
+      "tags": ["validation", "normalization", "design", "php", "poland"],
+      "description": "A take-home asks you to build a small utility for Polish contact data: phone numbers, NIP and PESEL. The spec only says 'validate and normalize'. As the senior engineer, describe how you would structure the solution: (1) where and how you separate normalization (making input canonical) from validation (accept/reject), and why; (2) what your functions return on invalid input and why you chose that over throwing exceptions; (3) which PHP facilities you use for digit checks, stripping separators, and checksum math, and which edge cases (empty string, whitespace, null, leading zeros, length, non-ASCII digits) you guard; (4) how you would test it, including the edge cases that usually get AI-generated code caught. Give short concrete code sketches for one validator.",
+      "starter_code": null,
+      "test_suite": null,
+      "solution": "Separate concerns into two layers. Normalization first: strip separators (spaces, dashes, parentheses, dots) with preg_replace('/[\\s\\-().]/', '', $input), trim whitespace, and canonicalize a country prefix (accept '+48', '0048', or bare digits). Validation second, on the clean value: enforce an exact length and digit set with preg_match('/^[0-9]{N}$/', $clean) before touching arithmetic, then run the checksum. Normalization must never silently 'fix' a wrong number into a right one — it only removes formatting; validation is the only place that says yes/no.\n\nReturn values, not exceptions: these are input-validation paths on the hot request boundary, so returning a nullable/bool keeps callers simple and avoids exception-driven control flow. A good signature is normalize_phone(string $phone): ?string (null = invalid) and is_valid_nip(string $nip): bool. Reserve exceptions for programmer errors, not user input.\n\nFacilities: preg_match for shape checks (never ctype alone if you cannot guarantee the C locale), str_starts_with/substr for prefix handling, and plain int arithmetic for checksums — cast each digit with (int) $s[$i]. Guard the edge cases that actually bite: empty string and whitespace-only (trim then reject ''), null vs '' semantics, leading zeros (a PESEL/NIP may start with 0 — never store as int, always string), wrong length, letters where digits belong, the NIP checksum of 10 (which is invalid by definition), and the ISBN 'X' final character.\n\nTesting: table-driven tests — one test per edge case, not one happy-path test. For each validator cover: valid example, wrong control digit, too short, too long, non-digit, empty, whitespace, and a formatting variant (dashes). The checksum formulas are where AI-generated code most often slips (wrong weight, off-by-one in the control-digit derivation), so pin them with at least one known-good and one known-bad fixture each.",
+      "rubric": {
+        "criteria": [
+          "Clear separation of normalization (formatting removal) from validation (accept/reject), with a reason",
+          "Explicit return-value contract for invalid input (nullable/bool) and a rationale over exceptions",
+          "Concrete, correct use of PHP facilities: preg_match, prefix handling, digit casting, checksum math",
+          "Edge cases covered: empty/whitespace, leading zeros kept as string, length, non-digit, NIP checksum 10",
+          "Table-driven testing approach with valid + invalid fixtures and formatting variants"
+        ],
+        "key_points": [
+          "Normalize (strip separators, canonicalize prefix) before validating; normalization only removes formatting",
+          "Return ?string / bool for input validation; exceptions are for programmer errors",
+          "Use preg_match('/^[0-9]{N}$/') for shape; keep identifiers as strings to preserve leading zeros",
+          "Cast digits with (int) $s[$i]; NIP checksum 10 is invalid; ISBN allows a final X",
+          "Test edge cases individually; pin checksums with known-good and known-bad fixtures"
+        ]
+      }
+    },
+    {
+      "type": "scenario",
+      "title": "Structure a 90-minute plain-PHP take-home with no AI",
+      "difficulty": "hard",
+      "tags": ["take-home", "process", "testing", "time-management"],
+      "description": "You receive a plain-PHP take-home (no framework, no AI): implement a handful of functions like string-to-hex, an ISBN validator and a phone normalizer, with a test harness you must pass. Walk through exactly how you would spend the 90 minutes: reading the spec, writing tests first, structuring the code, handling edge cases, and what you do when you get stuck or run out of time. Be concrete about the order of operations and the decisions you would make under time pressure.",
+      "starter_code": null,
+      "test_suite": null,
+      "solution": "Budget the 90 minutes deliberately: ~10 minutes reading the spec twice and writing down the exact signatures and return contracts, ~15 minutes writing a scratch test file (plain PHP assertions or a tiny expect() helper) with one test per rule from the spec, ~45 minutes implementing, ~15 minutes hardening edge cases, ~5 minutes final read-through. Never start coding before the signatures and edge cases are written down.\n\nTests first, even throwaway ones: for each function, translate every sentence of the spec into an assertion — valid input, invalid input, empty input, wrong length, boundary values. A tiny helper (function expect($name, $actual, $expected)) gives fast, readable failures. The tests are your safety net when pressure makes you sloppy, and they are also exactly what the grader will run, so encode the same expectations.\n\nStructure: one file, one function per requirement, no cleverness. Plain PHP: preg_match for shape, string functions for slicing, integer arithmetic for checksums, and (int) casts at digit boundaries. If a checksum formula is given, transcribe it literally — do not 'improve' it. Keep every function pure (no globals, no I/O), which makes each one independently testable.\n\nEdge cases are where take-homes are won: empty and whitespace-only strings, null vs '', leading zeros (keep identifiers as strings), wrong length, non-digit characters, uppercase/lowercase where it matters (hex, ISBN X), and the off-by-one in checksum derivation. After the happy path passes, systematically ask 'what breaks this?' for each function.\n\nWhen stuck: re-read the spec, not the code — most lost time comes from solving the wrong problem. If a function is blocked, stub it to return a sentinel so the rest still runs, then circle back. If time runs out, ship working, honest code over half-finished clever code, and write a short note listing what is missing and why. Do not reach for AI or framework conveniences — the point of the exercise is to prove the naked fluency is yours.",
+      "rubric": {
+        "criteria": [
+          "A realistic time budget across reading, tests, implementation, edge cases and review",
+          "Tests-first discipline with a concrete expect() helper and one assertion per spec sentence",
+          "Plain-PHP, pure-function structure with literal transcription of checksum formulas",
+          "Systematic edge-case checklist (empty, null, leading zeros, length, case, off-by-one)",
+          "A recovery plan for getting stuck and for running out of time that favors shipping working code"
+        ],
+        "key_points": [
+          "Write signatures and edge cases down before coding; budget time up front",
+          "Tests first: one assertion per rule; a tiny expect() helper keeps failures readable",
+          "One pure function per requirement; transcribe checksum formulas literally",
+          "Keep identifiers as strings to preserve leading zeros; guard empty/whitespace and null",
+          "When stuck re-read the spec; stub blocked functions; ship working code over clever unfinished code"
+        ]
+      }
+    }
+  ]
+}

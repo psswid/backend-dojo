@@ -51,6 +51,28 @@
           "Drain workers on deploy (--stop-when-empty / --max-time) so in-flight work finishes cleanly."
         ]
       }
+    },
+    {
+      "type": "snippet",
+      "title": "backoff_plan: build the full exponential backoff schedule",
+      "difficulty": "medium",
+      "tags": ["queues", "retries", "backoff", "schedule"],
+      "description": "Implement backoff_plan(int $maxAttempts, int $baseSeconds = 5, int $capSeconds = 3600): array. It returns the list of wait delays before each retry for a job that may run at most $maxAttempts times total — so the schedule has exactly ($maxAttempts - 1) entries. Each delay doubles from the previous, starting at $baseSeconds, and is capped at $capSeconds. Examples: backoff_plan(4, 5) returns [5, 10, 20]; backoff_plan(1, 5) returns [] (no retries); backoff_plan(5, 5, 15) returns [5, 10, 15, 15]; backoff_plan(3, 2) returns [2, 4].",
+      "starter_code": "function backoff_plan(int $maxAttempts, int $baseSeconds = 5, int $capSeconds = 3600): array\n{\n    // your code here\n}",
+      "test_suite": "expect('three retries', backoff_plan(4, 5), [5, 10, 20]);\nexpect('single attempt has no retries', backoff_plan(1, 5), []);\nexpect('cap clamps late delays', backoff_plan(5, 5, 15), [5, 10, 15, 15]);\nexpect('custom base', backoff_plan(3, 2), [2, 4]);",
+      "solution": "function backoff_plan(int $maxAttempts, int $baseSeconds = 5, int $capSeconds = 3600): array\n{\n    $plan = [];\n    $retries = $maxAttempts - 1;\n\n    for ($i = 0; $i < $retries; $i++) {\n        $plan[] = min($baseSeconds * (2 ** $i), $capSeconds);\n    }\n\n    return $plan;\n}",
+      "rubric": null
+    },
+    {
+      "type": "debug",
+      "title": "backoff_plan returns one delay too many",
+      "difficulty": "medium",
+      "tags": ["queues", "retries", "backoff", "off-by-one", "debugging"],
+      "description": "backoff_plan(int $maxAttempts, ...): array must return ($maxAttempts - 1) delays (one wait before each retry). The broken version loops $maxAttempts times instead of $maxAttempts - 1, so a job with 4 total attempts gets a 4th retry delay that should not exist. Fix the loop bound. Hint: maxAttempts total runs means exactly maxAttempts - 1 retries.",
+      "starter_code": "function backoff_plan(int $maxAttempts, int $baseSeconds = 5, int $capSeconds = 3600): array\n{\n    $plan = [];\n\n    for ($i = 0; $i < $maxAttempts; $i++) {\n        $plan[] = min($baseSeconds * (2 ** $i), $capSeconds);\n    }\n\n    return $plan;\n}",
+      "test_suite": "expect('three retries', backoff_plan(4, 5), [5, 10, 20]);\nexpect('single attempt has no retries', backoff_plan(1, 5), []);\nexpect('cap clamps late delays', backoff_plan(5, 5, 15), [5, 10, 15, 15]);",
+      "solution": "function backoff_plan(int $maxAttempts, int $baseSeconds = 5, int $capSeconds = 3600): array\n{\n    $plan = [];\n    $retries = $maxAttempts - 1;\n\n    for ($i = 0; $i < $retries; $i++) {\n        $plan[] = min($baseSeconds * (2 ** $i), $capSeconds);\n    }\n\n    return $plan;\n}",
+      "rubric": null
     }
   ]
 }
